@@ -7,6 +7,7 @@ const ManifestJob = require('../models/ManifestJob');
 const Vendor      = require('../models/Vendor');
 const Balance     = require('../models/Balance');
 const { getUspsZone1Rate } = require('../utils/uspsRates');
+const { NORMALIZED_TS_EXPR, tallyStatusCounts } = require('../utils/trackingStatus');
 
 const router = express.Router();
 
@@ -39,6 +40,7 @@ async function adminStats() {
     totalBalanceHeld,
     recentManifests,
     recentUsers,
+    trackingStatusGroups,
   ] = await Promise.all([
     // Users by role + isActive
     User.aggregate([
@@ -73,6 +75,11 @@ async function adminStats() {
       .select('carrier status userBilling assignedVendor user createdAt'),
     // Recent signups
     User.find().sort({ createdAt: -1 }).limit(6).select('firstName lastName email role isActive createdAt'),
+    // Tracking status breakdown across all generated labels (platform-wide)
+    Label.aggregate([
+      { $match: { status: 'generated' } },
+      { $group: { _id: NORMALIZED_TS_EXPR, count: { $sum: 1 } } },
+    ]),
   ]);
 
   // --- process user groups ---
@@ -115,6 +122,18 @@ async function adminStats() {
     else vendors.inactive = g.count;
   }
 
+  // --- tracking status breakdown + derived rates ---
+  const statusCounts = tallyStatusCounts(trackingStatusGroups);
+  const trackedTotal = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+  const pct = (n) => trackedTotal > 0 ? Math.round((n / trackedTotal) * 1000) / 10 : 0;
+  const rates = {
+    deliveryRate:       pct(statusCounts.delivered),
+    scanningRate:       trackedTotal > 0 ? Math.round(((trackedTotal - statusCounts.not_scanned_yet) / trackedTotal) * 1000) / 10 : 0,
+    // "Unpaid Postage" is surfaced by USPS as a scan exception, so it's tracked
+    // under the Exception/Problem status rather than its own value.
+    unpaidPostageRate:  pct(statusCounts.exception_problem),
+  };
+
   return {
     users,
     labels,
@@ -124,6 +143,9 @@ async function adminStats() {
     totalRevenue: labels.revenue + manifests.revenue,
     recentManifests,
     recentUsers,
+    trackingStatus: statusCounts,
+    trackingStatusTotal: trackedTotal,
+    rates,
   };
 }
 
@@ -641,6 +663,38 @@ router.get('/label-chart', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Label chart error:', err);
     res.status(500).json({ message: 'Error fetching chart data' });
+  }
+});
+
+// ── GET /api/stats/tracking-status  (user/reseller — month-filterable) ─────────
+// Query: month=YYYY-MM (omit for all-time)
+router.get('/tracking-status', authenticateToken, async (req, res) => {
+  try {
+    const { _id: userId } = req.user;
+    const uid = new mongoose.Types.ObjectId(String(userId));
+    const { month } = req.query;
+
+    const matchStage = { user: uid, status: 'generated' };
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      const [y, m] = month.split('-').map(Number);
+      matchStage.createdAt = { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) };
+    }
+
+    const groups = await Label.aggregate([
+      { $match: matchStage },
+      { $group: { _id: '$trackingStatus', count: { $sum: 1 } } },
+    ]);
+
+    const counts = { not_scanned_yet: 0, in_transit: 0, out_for_delivery: 0, delivered: 0,
+      exception_problem: 0, returned_to_sender: 0, pending_pickup: 0, delayed: 0 };
+    for (const g of groups) {
+      const key = g._id || 'not_scanned_yet';
+      if (key in counts) counts[key] = g.count;
+    }
+    res.json(counts);
+  } catch (err) {
+    console.error('Tracking status filter error:', err);
+    res.status(500).json({ message: 'Error fetching tracking status' });
   }
 });
 

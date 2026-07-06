@@ -239,7 +239,7 @@ const StatusHistoryModal: React.FC<{
 // ── Skeleton row ──────────────────────────────────────────────
 const SkeletonRow = () => (
   <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
-    {[60, 180, 130, 130, 80, 80, 110, 90].map((w, i) => (
+    {[60, 180, 130, 130, 80, 60, 80, 110, 90].map((w, i) => (
       <td key={i} style={{ padding: '0.875rem 0.875rem' }}>
         <div style={{ height: 10, width: w, borderRadius: 5, background: 'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
         {i === 1 && <div style={{ height: 8, width: 50, borderRadius: 4, background: '#F1F5F9', marginTop: 6 }} />}
@@ -274,7 +274,14 @@ const LabelHistory: React.FC = () => {
   const [vendorF,  setVendorF]  = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
+  const [typeF,    setTypeF]    = useState<'' | 'single' | 'bulk'>('');
+  const [statusF,  setStatusF]  = useState('');
   const [showDateFilter, setShowDateFilter] = useState(false);
+
+  // Stats (computed server-side across all matching pages, not just the current page)
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [typeCounts,   setTypeCounts]   = useState<{ single: number; bulk: number }>({ single: 0, bulk: 0 });
+  const [masterTracking, setMasterTracking] = useState(false);
 
   useEffect(() => {
     axios.get('/vendors').then(r => setVendors(r.data.vendors || [])).catch(() => {});
@@ -288,13 +295,17 @@ const LabelHistory: React.FC = () => {
       if (vendorF)  p.append('vendor',   vendorF);
       if (dateFrom) p.append('dateFrom', dateFrom);
       if (dateTo)   p.append('dateTo',   dateTo);
+      if (typeF)    p.append('type',     typeF);
+      if (statusF)  p.append('trackingStatus', statusF);
       const res = await axios.get(`/labels?${p}`);
       setLabels(res.data.labels || []);
       setTotal(res.data.total || 0);
       setTotalPages(res.data.totalPages || 1);
+      setStatusCounts(res.data.statusCounts || {});
+      setTypeCounts(res.data.typeCounts || { single: 0, bulk: 0 });
     } catch (e) { console.error(e); }
     finally { setIsLoading(false); }
-  }, [page, carrierF, vendorF, dateFrom, dateTo]);
+  }, [page, carrierF, vendorF, dateFrom, dateTo, typeF, statusF]);
 
   useEffect(() => { fetchLabels(); }, [fetchLabels]);
 
@@ -305,7 +316,7 @@ const LabelHistory: React.FC = () => {
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  const resetFilters = () => { setCarrierF(''); setVendorF(''); setDateFrom(''); setDateTo(''); setSearch(''); setPage(1); setShowDateFilter(false); };
+  const resetFilters = () => { setCarrierF(''); setVendorF(''); setDateFrom(''); setDateTo(''); setSearch(''); setTypeF(''); setStatusF(''); setPage(1); setShowDateFilter(false); };
 
   const vendorOptions = carrierF ? vendors.filter(v => v.carrier === carrierF) : vendors;
 
@@ -320,7 +331,7 @@ const LabelHistory: React.FC = () => {
     : labels;
 
   const totalSpent = labels.reduce((s, l) => s + (l.price || 0), 0);
-  const hasFilters = !!(carrierF || vendorF || dateFrom || dateTo);
+  const hasFilters = !!(carrierF || vendorF || dateFrom || dateTo || typeF || statusF);
 
   const handleReturn = (label: Label) => {
     navigate('/labels/single', {
@@ -350,6 +361,42 @@ const LabelHistory: React.FC = () => {
       .join(',');
     if (!ids) return;
     window.open(`https://tools.usps.com/go/TrackConfirmAction?tLabels=${ids}`, '_blank', 'noopener,noreferrer');
+  };
+
+  // Tracks every label matching the current filters (not just the current page), 35 per tab
+  const masterTrackAll = async () => {
+    if (masterTracking) return;
+    setMasterTracking(true);
+    try {
+      const p = new URLSearchParams();
+      if (carrierF) p.append('carrier', carrierF);
+      if (vendorF)  p.append('vendor',  vendorF);
+      if (dateFrom) p.append('dateFrom', dateFrom);
+      if (dateTo)   p.append('dateTo',   dateTo);
+      if (typeF)    p.append('type',     typeF);
+      if (statusF)  p.append('trackingStatus', statusF);
+      const res = await axios.get(`/labels/track-all-ids?${p}`);
+      const ids: string[] = (res.data.items || []).map((i: { trackingId: string }) => i.trackingId).filter(Boolean);
+      if (ids.length === 0) return;
+
+      const BATCH = 35;
+      const batches: string[][] = [];
+      for (let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
+
+      if (batches.length > 3) {
+        const ok = window.confirm(`This opens ${batches.length} new browser tabs to track all ${ids.length} matching labels (35 per tab). Continue?`);
+        if (!ok) return;
+      }
+
+      batches.forEach(batch => {
+        const url = `https://tools.usps.com/go/TrackConfirmAction?tLabels=${batch.map(encodeURIComponent).join(',')}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+      });
+    } catch (e) {
+      console.error('Master track failed', e);
+    } finally {
+      setMasterTracking(false);
+    }
   };
 
   const openPdf = async (label: Label) => {
@@ -400,9 +447,9 @@ const LabelHistory: React.FC = () => {
             <TagIcon style={{ width: 20, height: 20, color: '#fff' }} />
           </div>
           <div>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0F172A', margin: 0, letterSpacing: '-0.02em' }}>Single Labels</h1>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0F172A', margin: 0, letterSpacing: '-0.02em' }}>Label History</h1>
             <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '2px 0 0', fontWeight: 500 }}>
-              All individually generated shipping labels
+              Individually generated and bulk-uploaded shipping labels
             </p>
           </div>
         </div>
@@ -437,6 +484,25 @@ const LabelHistory: React.FC = () => {
           >
             <TruckIcon style={{ width: 14, height: 14 }} />
             Track All ({labels.filter(l => l.trackingId).length})
+          </button>
+          <button
+            onClick={masterTrackAll}
+            disabled={masterTracking || total === 0}
+            title="Track every label matching the current filters, across all pages — opens one tab per 35 labels"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              height: 36, padding: '0 14px',
+              background: '#EEF2FF', border: '1.5px solid #C7D2FE',
+              borderRadius: 10, color: '#4F46E5',
+              fontSize: '0.75rem', fontWeight: 700, cursor: masterTracking ? 'wait' : 'pointer',
+              transition: 'all 0.15s',
+              opacity: (masterTracking || total === 0) ? 0.55 : 1,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#E0E7FF'; e.currentTarget.style.borderColor = '#A5B4FC'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#EEF2FF'; e.currentTarget.style.borderColor = '#C7D2FE'; }}
+          >
+            <TruckIcon style={{ width: 14, height: 14 }} />
+            {masterTracking ? 'Opening tabs…' : `Master Track (${total})`}
           </button>
         </div>
       </div>
@@ -508,6 +574,73 @@ const LabelHistory: React.FC = () => {
           })}
         </div>
 
+        {/* Type tabs: Single vs Bulk */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '0 0.875rem', borderBottom: '1px solid var(--navy-100)', overflowX: 'auto' }}>
+          {[
+            { key: '' as const,       label: `All Types (${typeCounts.single + typeCounts.bulk})` },
+            { key: 'single' as const, label: `Single (${typeCounts.single})` },
+            { key: 'bulk' as const,   label: `Bulk (${typeCounts.bulk})` },
+          ].map(t => {
+            const active = typeF === t.key;
+            return (
+              <button
+                key={t.key || 'all-types'}
+                onClick={() => { setTypeF(t.key); setPage(1); }}
+                style={{
+                  padding: '0.5rem 0.875rem', border: 'none', background: 'transparent',
+                  fontSize: '0.75rem', fontWeight: active ? 700 : 500,
+                  color: active ? '#4F46E5' : 'var(--navy-500)',
+                  borderBottom: `2px solid ${active ? '#6366f1' : 'transparent'}`,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  transition: 'all 0.15s', marginBottom: -1,
+                }}>
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Label stats / status filter */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '0.625rem 0.875rem', borderBottom: '1px solid var(--navy-100)', overflowX: 'auto' }}>
+          <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0, marginRight: 2 }}>Status</span>
+          <button
+            onClick={() => { setStatusF(''); setPage(1); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, height: 28, padding: '0 10px', borderRadius: 20,
+              border: `1.5px solid ${statusF === '' ? '#6366f1' : 'var(--navy-200)'}`,
+              background: statusF === '' ? '#6366f1' : 'var(--navy-50)',
+              color: statusF === '' ? '#fff' : 'var(--navy-500)',
+              fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+            }}>
+            All
+            <span style={{ background: statusF === '' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.06)', borderRadius: 10, padding: '1px 6px', fontSize: '0.63rem' }}>
+              {Object.values(statusCounts).reduce((a, b) => a + b, 0)}
+            </span>
+          </button>
+          {TS_OPTIONS.map(k => {
+            const cfg = TS_CONFIG[k];
+            const count = statusCounts[k] ?? 0;
+            const active = statusF === k;
+            return (
+              <button
+                key={k}
+                onClick={() => { setStatusF(active ? '' : k); setPage(1); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, height: 28, padding: '0 10px', borderRadius: 20,
+                  border: `1.5px solid ${active ? cfg.color : cfg.border}`,
+                  background: active ? cfg.color : cfg.bg,
+                  color: active ? '#fff' : cfg.color,
+                  fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+                }}>
+                {cfg.label}
+                <span style={{ background: active ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.06)', borderRadius: 10, padding: '1px 6px', fontSize: '0.63rem' }}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Date range row */}
         {showDateFilter && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '0.625rem 0.875rem', background: 'var(--navy-50)' }}>
@@ -538,7 +671,7 @@ const LabelHistory: React.FC = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
             <thead>
               <tr style={{ background: 'var(--navy-50)' }}>
-                {['#', 'Tracking & Carrier', 'Route', 'User', 'Vendor', 'Price', 'Date', 'Tracking Status', 'Actions'].map(h => (
+                {['#', 'Tracking & Carrier', 'Route', 'User', 'Vendor', 'Type', 'Price', 'Date', 'Tracking Status', 'Actions'].map(h => (
                   <th key={h} style={{ padding: '0.625rem 0.875rem', textAlign: 'left', fontSize: '0.63rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.07em', whiteSpace: 'nowrap', borderBottom: '1.5px solid var(--navy-200)' }}>
                     {h}
                   </th>
@@ -550,7 +683,7 @@ const LabelHistory: React.FC = () => {
                 Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ padding: '4rem', textAlign: 'center' }}>
+                  <td colSpan={10} style={{ padding: '4rem', textAlign: 'center' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 52, height: 52, borderRadius: 14, background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <TagIcon style={{ width: 26, height: 26, color: '#CBD5E1' }} />
@@ -645,6 +778,18 @@ const LabelHistory: React.FC = () => {
                       <td style={{ padding: '0.875rem 0.875rem', minWidth: 110 }}>
                         <div style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 500, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label.vendorName || '—'}</div>
                         {label.shippingService && <div style={{ fontSize: '0.65rem', color: '#94A3B8', marginTop: 1 }}>{label.shippingService}</div>}
+                      </td>
+
+                      {/* Type */}
+                      <td style={{ padding: '0.875rem 0.875rem' }}>
+                        <span style={{
+                          fontSize: '0.63rem', fontWeight: 700, padding: '3px 9px', borderRadius: 20, whiteSpace: 'nowrap',
+                          background: label.isBulk ? '#FDF4FF' : '#EEF2FF',
+                          color:      label.isBulk ? '#A21CAF' : '#4F46E5',
+                          border: `1px solid ${label.isBulk ? '#F5D0FE' : '#E0E7FF'}`,
+                        }}>
+                          {label.isBulk ? 'Bulk' : 'Single'}
+                        </span>
                       </td>
 
                       {/* Price */}

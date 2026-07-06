@@ -61,6 +61,8 @@ function isValidObjectId(v) {
   return /^[0-9a-fA-F]{24}$/.test(String(v));
 }
 
+const { buildTrackingStatusFilter, NORMALIZED_TS_EXPR, tallyStatusCounts } = require('../utils/trackingStatus');
+
 // ── POST /api/labels/single ───────────────────────────────────
 // Generate a single label via ShippersHub, deduct balance
 router.post('/single', authenticateToken, [
@@ -591,10 +593,10 @@ router.post('/bulk', authenticateToken, [
 });
 
 // ── GET /api/labels ───────────────────────────────────────────
-// Paginated label history for the authenticated user
+// Paginated label history for the authenticated user (single + bulk)
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { carrier, status, dateFrom, dateTo } = req.query;
+    const { carrier, status, dateFrom, dateTo, type, trackingStatus } = req.query;
     const page  = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(parseInt(req.query.limit) || 15, PAGE_LIMIT_MAX);
 
@@ -604,37 +606,106 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid vendor ID' });
     }
 
-    // This endpoint serves the single-label history only
-    let filter = { isBulk: false };
+    // Base filter: everything except the trackingStatus facet (used to compute status counts below)
+    let baseFilter = {};
     if (req.user.role !== 'admin') {
-      filter.user = req.user._id;
+      baseFilter.user = req.user._id;
     }
-    if (carrier)     filter.carrier = carrier;
-    if (status)      filter.status  = status;
-    if (vendorParam) filter.vendor  = vendorParam;
+    if (type === 'single')   baseFilter.isBulk = false;
+    else if (type === 'bulk') baseFilter.isBulk = true;
+    if (carrier)     baseFilter.carrier = carrier;
+    if (status)      baseFilter.status  = status;
+    if (vendorParam) baseFilter.vendor  = vendorParam;
     if (dateFrom || dateTo) {
-      filter.createdAt = {};
-      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-      if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+      baseFilter.createdAt = {};
+      if (dateFrom) baseFilter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   baseFilter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
     }
 
-    const total  = await Label.countDocuments(filter);
-    const labels = await Label.find(filter)
-      .populate('user', 'firstName lastName email')
-      .populate('vendor', 'name carrier rate')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
+    // Full filter additionally scoped to the requested tracking-status facet
+    const filter = { ...baseFilter, ...buildTrackingStatusFilter(trackingStatus) };
+
+    const [total, labels, statusCountsAgg, typeCountsAgg] = await Promise.all([
+      Label.countDocuments(filter),
+      Label.find(filter)
+        .populate('user', 'firstName lastName email')
+        .populate('vendor', 'name carrier rate')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+      Label.aggregate([
+        { $match: baseFilter },
+        { $group: { _id: NORMALIZED_TS_EXPR, count: { $sum: 1 } } },
+      ]),
+      Label.aggregate([
+        { $match: baseFilter },
+        { $group: { _id: '$isBulk', count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const statusCounts = tallyStatusCounts(statusCountsAgg);
+    const typeCounts = { single: 0, bulk: 0 };
+    for (const g of typeCountsAgg) {
+      if (g._id === true) typeCounts.bulk += g.count;
+      else typeCounts.single += g.count;
+    }
 
     res.json({
       labels,
       total,
       totalPages:  Math.ceil(total / limit),
-      currentPage: page
+      currentPage: page,
+      statusCounts,
+      typeCounts,
     });
   } catch (error) {
     console.error('Get labels error:', error);
     res.status(500).json({ message: 'Server error getting labels' });
+  }
+});
+
+// ── GET /api/labels/track-all-ids ─────────────────────────────
+// Lightweight, unpaginated list of tracking IDs matching the current filters,
+// used to power "master tracking" across every page of results.
+router.get('/track-all-ids', authenticateToken, async (req, res) => {
+  try {
+    const { carrier, dateFrom, dateTo, type, trackingStatus } = req.query;
+
+    const vendorParam = req.query.vendor;
+    if (vendorParam && !isValidObjectId(vendorParam)) {
+      return res.status(400).json({ message: 'Invalid vendor ID' });
+    }
+
+    let filter = {};
+    if (req.user.role !== 'admin') filter.user = req.user._id;
+    if (type === 'single')   filter.isBulk = false;
+    else if (type === 'bulk') filter.isBulk = true;
+    if (carrier)     filter.carrier = carrier;
+    if (vendorParam) filter.vendor  = vendorParam;
+    Object.assign(filter, buildTrackingStatusFilter(trackingStatus));
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+    filter.trackingId = { $exists: true, $ne: '' };
+
+    // Safety cap so a very large account can't be used to force a huge unpaginated query
+    const MAX_IDS = 3500;
+    const labels = await Label.find(filter)
+      .select('trackingId carrier')
+      .sort({ createdAt: -1 })
+      .limit(MAX_IDS)
+      .lean();
+
+    res.json({
+      items:    labels.map(l => ({ trackingId: l.trackingId, carrier: l.carrier })),
+      total:    labels.length,
+      truncated: labels.length >= MAX_IDS,
+    });
+  } catch (error) {
+    console.error('Get track-all ids error:', error);
+    res.status(500).json({ message: 'Server error getting tracking IDs' });
   }
 });
 

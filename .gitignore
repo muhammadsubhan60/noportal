@@ -73,6 +73,9 @@ master-security-analysis-prompt.md
 # Debug files
 debug.log
 
+# Playwright MCP session artifacts
+.playwright-mcp/
+
 # Temp files
 nul
 tmpclaude-*

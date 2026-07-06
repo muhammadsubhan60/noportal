@@ -32,6 +32,9 @@ interface AdminStats {
   totalRevenue: number;
   recentManifests: any[];
   recentUsers: any[];
+  trackingStatus: Record<string, number>;
+  trackingStatusTotal: number;
+  rates: { deliveryRate: number; scanningRate: number; unpaidPostageRate: number };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -58,6 +61,19 @@ const MANIFEST_STATUS_LABEL: Record<string, string> = {
 const CARRIER_COLORS: Record<string, string> = {
   USPS: '#1D4ED8', UPS: '#92400E', FedEx: '#5B21B6', DHL: '#B45309',
 };
+
+// ── Tracking status config (mirrors LabelHistory.tsx) ──────────────────────────
+const TS_CONFIG: Record<string, { label: string; bg: string; color: string; border: string }> = {
+  not_scanned_yet:    { label: 'Not Scanned Yet',    bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
+  in_transit:         { label: 'In Transit',          bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
+  out_for_delivery:   { label: 'Out for Delivery',    bg: '#F5F3FF', color: '#6D28D9', border: '#DDD6FE' },
+  delivered:          { label: 'Delivered',           bg: '#F0FDF4', color: '#15803D', border: '#BBF7D0' },
+  exception_problem:  { label: 'Exception / Problem', bg: '#FFF5F5', color: '#DC2626', border: '#FECACA' },
+  returned_to_sender: { label: 'Returned to Sender',  bg: '#FFF1F2', color: '#BE123C', border: '#FECDD3' },
+  pending_pickup:     { label: 'Pending Pickup',      bg: '#FFF7ED', color: '#C2410C', border: '#FED7AA' },
+  delayed:            { label: 'Delayed',             bg: '#FFFBEB', color: '#92400E', border: '#FDE68A' },
+};
+const TS_OPTIONS = Object.keys(TS_CONFIG);
 
 // ── MetricCard ─────────────────────────────────────────────────────────────────
 const MetricCard = ({
@@ -213,7 +229,7 @@ const AdminDashboard: React.FC = () => {
 
   if (!stats) return null;
 
-  const { users, labels, manifests, vendors, totalBalanceHeld, totalRevenue, recentManifests, recentUsers } = stats;
+  const { users, labels, manifests, vendors, totalBalanceHeld, totalRevenue, recentManifests, recentUsers, trackingStatus, trackingStatusTotal, rates } = stats;
   const labelTotal = labels.total || 1; // avoid div/0
   const carrierKeys = ['USPS', 'UPS', 'FedEx', 'DHL'];
 
@@ -373,6 +389,49 @@ const AdminDashboard: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* ── Row 3.5 — Delivery & Tracking Health ────────────────────────────── */}
+      <div className="sh-card" style={{ padding: '1.25rem 1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+          <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--navy-900)' }}>Delivery & Tracking Health</h3>
+          <button className="btn btn-ghost btn-sm" style={{ fontSize: '0.72rem' }} onClick={() => navigate('/labels/history')}>
+            View labels →
+          </button>
+        </div>
+
+        {/* Rate cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.875rem', marginBottom: '1.25rem' }}>
+          {[
+            { label: 'Delivery Rate',       value: rates.deliveryRate,      color: '#22c55e', sub: `${fmtN(trackingStatus.delivered)} of ${fmtN(trackingStatusTotal)} generated labels delivered` },
+            { label: 'Scanning Rate',       value: rates.scanningRate,      color: '#0ea5e9', sub: `${fmtN(trackingStatusTotal - trackingStatus.not_scanned_yet)} of ${fmtN(trackingStatusTotal)} labels have a scan on file` },
+            { label: 'Unpaid Postage Rate', value: rates.unpaidPostageRate, color: '#ef4444', sub: `${fmtN(trackingStatus.exception_problem)} labels flagged Exception / Problem` },
+          ].map(({ label, value, color, sub }) => (
+            <div key={label} style={{ background: `${color}0a`, border: `1.5px solid ${color}30`, borderRadius: 12, padding: '0.95rem 1.1rem' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--navy-500)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: '1.7rem', fontWeight: 800, color, letterSpacing: '-0.02em', lineHeight: 1 }}>{value.toFixed(1)}%</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--navy-400)', marginTop: 6 }}>{sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Status breakdown pills */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {TS_OPTIONS.map(k => {
+            const cfg = TS_CONFIG[k];
+            const count = trackingStatus[k] ?? 0;
+            return (
+              <div key={k} style={{
+                display: 'flex', alignItems: 'center', gap: 6, height: 30, padding: '0 11px', borderRadius: 20,
+                border: `1.5px solid ${cfg.border}`, background: cfg.bg, color: cfg.color,
+                fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap',
+              }}>
+                {cfg.label}
+                <span style={{ background: 'rgba(15,23,42,0.06)', borderRadius: 10, padding: '1px 7px', fontSize: '0.68rem' }}>{fmtN(count)}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 

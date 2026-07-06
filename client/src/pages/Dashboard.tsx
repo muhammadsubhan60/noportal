@@ -6,7 +6,7 @@ import {
   CurrencyDollarIcon, TagIcon, ClipboardDocumentListIcon,
   UserGroupIcon, ArrowUpRightIcon, ClockIcon, SparklesIcon,
   InformationCircleIcon, ArrowTrendingUpIcon, ChevronDownIcon,
-  ArrowUpTrayIcon,
+  ArrowUpTrayIcon, CalendarDaysIcon, XMarkIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -743,6 +743,38 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
     return saved ? parseFloat(saved) || 0 : 0;
   });
 
+  // ── Tracking status filter ──────────────────────────────────────────────────
+  const currentMonthStr = (() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const [tsMonth,   setTsMonth]   = useState(currentMonthStr);
+  const [tsCounts,  setTsCounts]  = useState<UserStats['trackingStatus'] | null>(null);
+  const [tsLoading, setTsLoading] = useState(false);
+
+  // Generate last 13 month options (current + 12 previous)
+  const tsMonthOptions = (() => {
+    const opts: { value: string; label: string }[] = [];
+    const n = new Date();
+    for (let i = 0; i < 13; i++) {
+      const d = new Date(n.getFullYear(), n.getMonth() - i, 1);
+      opts.push({
+        value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      });
+    }
+    return opts;
+  })();
+
+  useEffect(() => {
+    setTsLoading(true);
+    const url = tsMonth ? `/stats/tracking-status?month=${tsMonth}` : '/stats/tracking-status';
+    axios.get(url)
+      .then(r => setTsCounts(r.data))
+      .catch(() => {})
+      .finally(() => setTsLoading(false));
+  }, [tsMonth]);
+
   const load = useCallback(async () => {
     try {
       const [statsRes, accessRes] = await Promise.all([
@@ -817,11 +849,60 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
       </div>
 
       {/* Tracking Status Breakdown */}
-      {stats.trackingStatus && (
-        <div className="sh-card" style={{ padding: '1.3rem 1.5rem' }}>
-          <SectionHeader title="Label Tracking Status" accent="#1D4ED8"
-            action={<button className="btn btn-ghost btn-sm" style={{ fontSize: '0.72rem' }} onClick={() => navigate('/labels/history')}>View Labels →</button>}
-          />
+      <div className="sh-card" style={{ padding: '1.3rem 1.5rem' }}>
+        <SectionHeader
+          title="Label Tracking Status"
+          accent="#1D4ED8"
+          action={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              {/* Month picker */}
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <CalendarDaysIcon style={{ position: 'absolute', left: 8, width: 13, height: 13, color: tsMonth ? '#1D4ED8' : 'var(--navy-400)', pointerEvents: 'none' }} />
+                <select
+                  value={tsMonth}
+                  onChange={e => setTsMonth(e.target.value)}
+                  style={{
+                    height: 30, paddingLeft: 26, paddingRight: tsMonth ? 28 : 10,
+                    border: `1.5px solid ${tsMonth ? '#BFDBFE' : 'var(--navy-200)'}`,
+                    borderRadius: 8,
+                    background: tsMonth ? '#EFF6FF' : 'var(--bg-card)',
+                    color: tsMonth ? '#1D4ED8' : 'var(--navy-600)',
+                    fontSize: '0.72rem', fontWeight: 600,
+                    appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer', outline: 'none',
+                  }}
+                >
+                  <option value="">All Time</option>
+                  {tsMonthOptions.map(m => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+                {/* Clear button inside select */}
+                {tsMonth && (
+                  <button
+                    onClick={() => setTsMonth('')}
+                    title="Show all time"
+                    style={{
+                      position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                      background: 'none', border: 'none', padding: 1, cursor: 'pointer',
+                      color: '#1D4ED8', display: 'flex', alignItems: 'center',
+                    }}
+                  >
+                    <XMarkIcon style={{ width: 11, height: 11 }} />
+                  </button>
+                )}
+              </div>
+              <button className="btn btn-ghost btn-sm" style={{ fontSize: '0.72rem' }} onClick={() => navigate('/labels/history')}>
+                View Labels →
+              </button>
+            </div>
+          }
+        />
+
+        {tsLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '1.5rem 0' }}>
+            <div className="spinner" />
+          </div>
+        ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.75rem' }}>
             {([
               { key: 'not_scanned_yet',   label: 'Not Scanned Yet',    bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0', dot: '#94A3B8' },
@@ -833,7 +914,7 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
               { key: 'pending_pickup',    label: 'Pending Pickup',     bg: '#FFF7ED', color: '#C2410C', border: '#FED7AA', dot: '#F97316' },
               { key: 'delayed',           label: 'Delayed',            bg: '#FFFBEB', color: '#92400E', border: '#FDE68A', dot: '#F59E0B' },
             ] as const).map(({ key, label, bg, color, border, dot }) => {
-              const count = stats.trackingStatus![key] ?? 0;
+              const count = tsCounts?.[key] ?? 0;
               return (
                 <div key={key} style={{ background: bg, border: `1.5px solid ${border}`, borderRadius: 12, padding: '0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -846,8 +927,8 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Mid row */}
       <div className="dashboard-two-col-grid" style={{ display: 'grid', gap: '1rem' }}>
