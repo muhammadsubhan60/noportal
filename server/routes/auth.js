@@ -6,6 +6,7 @@ const Balance        = require('../models/Balance');
 const Rate           = require('../models/Rate');
 const { generateToken, authenticateToken } = require('../middleware/auth');
 const { sendMail }   = require('../services/mailer');
+const { validatePassword } = require('../utils/passwordPolicy');
 
 const router = express.Router();
 
@@ -14,7 +15,11 @@ router.post('/register', [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
-  body('password').isLength({ min: 12 }).withMessage('Password must be at least 12 characters'),
+  body('password').custom(value => {
+    const err = validatePassword(value);
+    if (err) throw new Error(err);
+    return true;
+  }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -193,7 +198,11 @@ router.post('/forgot-password', [
 // ── POST /api/auth/reset-password ────────────────────────────
 router.post('/reset-password', [
   body('token').notEmpty().withMessage('Reset token is required'),
-  body('password').isLength({ min: 12 }).withMessage('Password must be at least 12 characters')
+  body('password').custom(value => {
+    const err = validatePassword(value);
+    if (err) throw new Error(err);
+    return true;
+  }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);

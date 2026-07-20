@@ -8,7 +8,9 @@ const Vendor           = require('../models/Vendor');
 const Balance          = require('../models/Balance');
 const UserVendorAccess = require('../models/UserVendorAccess');
 const ManifestJob      = require('../models/ManifestJob');
-const { authenticateToken, authorize } = require('../middleware/auth');
+const User             = require('../models/User');
+const ErrorLog         = require('../models/ErrorLog');
+const { authenticateToken, authorize, authorizeCC } = require('../middleware/auth');
 const shippershub = require('../services/shippershub');
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -48,6 +50,40 @@ function rowsToCSV(rows) {
 
 const router = express.Router();
 
+// Persist a real label-generation failure for the admin-only Logs & Errors page,
+// and push it live to admins already viewing it. Never surfaced to the end user.
+async function logLabelError(req, { vendor, isBulk, bulkJobId, source, message, httpStatus }) {
+  try {
+    const entry = await ErrorLog.create({
+      user:       req.user._id,
+      tenantId:   req.user.tenantId || req.user._id,
+      vendor:     vendor?._id || null,
+      vendorName: vendor?.name || '',
+      carrier:    vendor?.carrier || '',
+      portal:     vendor?.source || null,
+      isBulk:     !!isBulk,
+      bulkJobId:  bulkJobId || null,
+      source,
+      message:    String(message || 'Unknown error').slice(0, 1000),
+      httpStatus: httpStatus || null,
+    });
+    if (req.io) {
+      req.io.to('admin-room').emit('admin-label-failed', {
+        _id:        entry._id,
+        carrier:    entry.carrier,
+        vendorName: entry.vendorName,
+        portal:     entry.portal,
+        isBulk:     entry.isBulk,
+        source:     entry.source,
+        message:    entry.message,
+        createdAt:  entry.createdAt,
+      });
+    }
+  } catch (logErr) {
+    console.error('[ErrorLog] failed to persist error log:', logErr.message);
+  }
+}
+
 /** Maximum results per page for list endpoints */
 const PAGE_LIMIT_MAX = 100;
 
@@ -79,6 +115,7 @@ router.post('/single', authenticateToken, [
   body('to_zip').notEmpty().withMessage('To zip is required'),
   body('weight').isFloat({ gt: 0 }).withMessage('Weight must be a positive number')
 ], async (req, res) => {
+  let vendor = null;
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -88,7 +125,7 @@ router.post('/single', authenticateToken, [
     const { vendorId, ...labelFields } = req.body;
 
     // Load the vendor config
-    const vendor = await Vendor.findById(vendorId);
+    vendor = await Vendor.findById(vendorId);
     if (!vendor || !vendor.isActive) {
       return res.status(404).json({ message: 'Vendor not found or inactive' });
     }
@@ -126,11 +163,46 @@ router.post('/single', authenticateToken, [
       });
     }
 
-    // Call ShippersHub to generate label
+    // Call the appropriate service to generate the label
     let shippershubResult = null;
     let trackingId = '';
+    let pdfUrl     = null;
 
-    if (vendor.source === 'shippershub' && vendor.shippershubCarrierId && vendor.shippershubVendorId) {
+    if (vendor.source === 'labelcrow') {
+      if (!vendor.labelcrowProviderKey) {
+        await logLabelError(req, { vendor, isBulk: false, source: 'single-labelcrow-config', message: `Vendor "${vendor.name}" has no Label Crow provider key configured.`, httpStatus: 400 });
+        return res.status(400).json({
+          message: `Vendor "${vendor.name}" has no Label Crow provider key configured. Re-sync vendors from Admin → Vendors → Sync Label Crow.`,
+        });
+      }
+      const labelcrow = require('../services/labelcrow');
+      const lcResult = await labelcrow.createSingleLabel({
+        seriesId:     vendor.labelcrowSeriesId,
+        carrier:      vendor.carrier.toLowerCase(),
+        serviceClass: vendor.labelcrowServiceClass,
+        providerKey:  vendor.labelcrowProviderKey,
+        weight,
+        from: {
+          name:     labelFields.from_name,
+          address:  labelFields.from_address1,
+          address2: labelFields.from_address2 || undefined,
+          city:     labelFields.from_city,
+          state:    labelFields.from_state,
+          zip:      labelFields.from_zip,
+        },
+        to: {
+          name:     labelFields.to_name,
+          address:  labelFields.to_address1,
+          address2: labelFields.to_address2 || undefined,
+          city:     labelFields.to_city,
+          state:    labelFields.to_state,
+          zip:      labelFields.to_zip,
+        },
+        orderNumber: labelFields.note || undefined,
+      });
+      trackingId = lcResult.tracking || '';
+      pdfUrl     = lcResult.pdfUrl   || null;
+    } else if (vendor.source === 'shippershub' && vendor.shippershubCarrierId && vendor.shippershubVendorId) {
       shippershubResult = await shippershub.createSingleLabel({
         carrier:  vendor.shippershubCarrierId,
         vendor:   vendor.shippershubVendorId,
@@ -159,6 +231,73 @@ router.post('/single', authenticateToken, [
         height: parseFloat(labelFields.height) || 1,
       });
       trackingId = shippershubResult?.trackingID || shippershubResult?.trackingId || '';
+      pdfUrl     = shippershubResult?.awsPath || shippershubResult?.pdfUrl || null;
+
+    } else if (vendor.source === 'shiplabel') {
+      const slSvc = require('../services/shiplabel');
+
+      // User-selected series (from multi-series picker) takes priority over vendor defaults
+      let activeSeries = labelFields.shiplabel_series || vendor.shiplabelLabelSeries || '';
+      let activeFormat = labelFields.shiplabel_format || vendor.shiplabelLabelFormat || '';
+
+      // If vendor has a multi-series list, validate user's selection
+      if (vendor.shiplabelSeries && vendor.shiplabelSeries.length > 0) {
+        if (!activeSeries) {
+          return res.status(400).json({ message: 'Select a label series before generating.' });
+        }
+        const seriesEntry = vendor.shiplabelSeries.find(s => s.series === activeSeries);
+        if (!seriesEntry) {
+          await logLabelError(req, { vendor, isBulk: false, source: 'single-shiplabel-config', message: `Series "${activeSeries}" is not configured on vendor "${vendor.name}".`, httpStatus: 400 });
+          return res.status(400).json({ message: `Series "${activeSeries}" is not configured on this vendor.` });
+        }
+        // For non-admin: check user's allowed series
+        if (!isAdmin) {
+          const accessRec = await UserVendorAccess.findOne({ user: req.user._id, vendor: vendorId });
+          const allowed = accessRec?.allowedShiplabelSeries || [];
+          if (allowed.length > 0 && !allowed.includes(activeSeries)) {
+            return res.status(403).json({ message: `You are not allowed to use series "${activeSeries}".` });
+          }
+        }
+        activeFormat = seriesEntry.format;
+      }
+
+      const slResult = await slSvc.createOrder({
+        label_id:     vendor.shiplabelServiceId,
+        fromName:     labelFields.from_name     || '',
+        fromCompany:  labelFields.from_company  || '',
+        fromAddress:  labelFields.from_address1 || '',
+        fromAddress2: labelFields.from_address2 || '',
+        fromZip:      labelFields.from_zip      || '',
+        fromState:    labelFields.from_state    || '',
+        fromCity:     labelFields.from_city     || '',
+        fromCountry:  'US',
+        toName:       labelFields.to_name       || '',
+        toCompany:    labelFields.to_company    || '',
+        toAddress:    labelFields.to_address1   || '',
+        toAddress2:   labelFields.to_address2   || '',
+        toZip:        labelFields.to_zip        || '',
+        toState:      labelFields.to_state      || '',
+        toCity:       labelFields.to_city       || '',
+        toCountry:    'US',
+        weight: parseFloat(labelFields.weight) || 0,
+        length: parseFloat(labelFields.length) || 0,
+        height: parseFloat(labelFields.height) || 0,
+        width:  parseFloat(labelFields.width)  || 0,
+        ...(activeSeries ? { label_series: activeSeries } : {}),
+        ...(activeFormat ? { label_format: activeFormat } : {}),
+      });
+      if (slResult.label_created === 'fail') {
+        throw new Error('ShipLabel rejected this label — the series/format combination is not valid for your account. Try a different series or format in Admin → Vendors.');
+      }
+      const slKeys    = Object.keys(slResult);
+      const slTrkKey  = slKeys.find(k => /track|barcode/i.test(k) && slResult[k]);
+      const slPdfKey  = slKeys.find(k => /^(pdf|label(_url|_pdf)?|label_link|download)$/i.test(k) && slResult[k]);
+      trackingId = slResult.tracking_id || slResult.tracking_number || slResult.barcode
+        || slResult.tracking || slResult.trackingNumber || slResult.trackingId
+        || (slTrkKey ? String(slResult[slTrkKey]) : '') || '';
+      pdfUrl = slResult.pdf || slResult.label_url || slResult.label
+        || slResult.pdf_url || slResult.label_pdf
+        || (slPdfKey ? String(slResult[slPdfKey]) : '') || null;
     }
 
     // Deduct balance
@@ -179,7 +318,7 @@ router.post('/single', authenticateToken, [
       shippershubLabelId: shippershubResult?._id || null,
       trackingId,
       price:      effectiveRate,
-      pdfUrl:     shippershubResult?.awsPath || shippershubResult?.pdfUrl || null,
+      pdfUrl:     shippershubResult?.awsPath || shippershubResult?.pdfUrl || pdfUrl,
       awsKey:     shippershubResult?.awsKey  || null,
       awsPath:    shippershubResult?.awsPath || null,
       isBulk:     false,
@@ -230,7 +369,9 @@ router.post('/single', authenticateToken, [
       error.message.includes('not found') ||
       error.message.includes('Unauthorized')
     );
-    res.status(isShippersHubError ? 400 : 500).json({ message: error.message || 'Server error generating label' });
+    const httpStatus = isShippersHubError ? 400 : 500;
+    await logLabelError(req, { vendor, isBulk: false, source: 'single-label', message: error.message, httpStatus });
+    res.status(httpStatus).json({ message: error.message || 'Server error generating label' });
   }
 });
 
@@ -240,6 +381,7 @@ router.post('/bulk', authenticateToken, [
   body('vendorId').notEmpty().withMessage('Vendor ID is required'),
   body('labels').isArray({ min: 1 }).withMessage('At least one label is required'),
 ], async (req, res) => {
+  let vendor = null;
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -248,7 +390,7 @@ router.post('/bulk', authenticateToken, [
 
     const { vendorId, labels: labelRows } = req.body;
 
-    const vendor = await Vendor.findById(vendorId);
+    vendor = await Vendor.findById(vendorId);
     if (!vendor || !vendor.isActive) {
       return res.status(404).json({ message: 'Vendor not found or inactive' });
     }
@@ -588,6 +730,7 @@ router.post('/bulk', authenticateToken, [
 
   } catch (error) {
     console.error('Bulk label error:', error);
+    await logLabelError(req, { vendor, isBulk: true, source: 'bulk-generic', message: error.message, httpStatus: 500 });
     res.status(500).json({ message: error.message || 'Server error generating bulk labels' });
   }
 });
@@ -799,6 +942,369 @@ router.get('/bulk-jobs', authenticateToken, async (req, res) => {
   }
 });
 
+// ── GET /api/labels/all-history ───────────────────────────────
+// Single + bulk label history, unified (used by the Single History page)
+router.get('/all-history', authenticateToken, async (req, res) => {
+  try {
+    const { carrier, trackingStatus, isBulk, dateFrom, dateTo, search } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(parseInt(req.query.limit) || 35, PAGE_LIMIT_MAX);
+
+    const filter = {};
+
+    if (req.user.role !== 'admin') {
+      filter.user = req.user._id;
+    } else {
+      const vendorParam = req.query.vendor;
+      const userParam   = req.query.userId;
+      if (vendorParam && isValidObjectId(vendorParam)) filter.vendor = vendorParam;
+      if (userParam   && isValidObjectId(userParam))   filter.user   = userParam;
+    }
+
+    if (carrier) filter.carrier = carrier;
+    if (isBulk === 'true')  filter.isBulk = true;
+    if (isBulk === 'false') filter.isBulk = false;
+
+    if (trackingStatus) {
+      const statuses = String(trackingStatus).split(',').map(s => s.trim()).filter(Boolean);
+      filter.trackingStatus = statuses.length === 1 ? statuses[0] : { $in: statuses };
+    }
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+
+    if (search && search.length <= 200) {
+      const esc = escapeRegex(search);
+      filter.$or = [
+        { trackingId: { $regex: esc, $options: 'i' } },
+        { to_name:    { $regex: esc, $options: 'i' } },
+        { from_name:  { $regex: esc, $options: 'i' } },
+      ];
+    }
+
+    const total  = await Label.countDocuments(filter);
+    const labels = await Label.find(filter)
+      .populate('user',   'firstName lastName email')
+      .populate('vendor', 'name carrier rate')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    res.json({ labels, total, totalPages: Math.ceil(total / limit), currentPage: page });
+  } catch (err) {
+    console.error('All history error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/cc-all  (Command Center) ──────────────────
+router.get('/cc-all', authenticateToken, authorizeCC, async (req, res) => {
+  try {
+    const { trackingStatus, carrier, vendorId, userId, dateFrom, dateTo, search } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(parseInt(req.query.limit) || 35, PAGE_LIMIT_MAX);
+
+    const filter = {};
+    if (carrier) filter.carrier = carrier;
+    if (trackingStatus) {
+      const statuses = String(trackingStatus).split(',').map(s => s.trim()).filter(Boolean);
+      filter.trackingStatus = statuses.length === 1 ? statuses[0] : { $in: statuses };
+    }
+    if (vendorId && isValidObjectId(vendorId)) filter.vendor    = vendorId;
+    if (userId   && isValidObjectId(userId))   filter.user      = userId;
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+    if (search && search.length <= 200) {
+      const escaped = escapeRegex(search);
+      filter.$or = [
+        { trackingId: { $regex: escaped, $options: 'i' } },
+        { from_name:  { $regex: escaped, $options: 'i' } },
+        { to_name:    { $regex: escaped, $options: 'i' } },
+        { to_city:    { $regex: escaped, $options: 'i' } },
+      ];
+    }
+
+    const total  = await Label.countDocuments(filter);
+    const labels = await Label.find(filter)
+      .populate('user',   'firstName lastName email')
+      .populate('vendor', 'name carrier rate source')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    res.json({ labels, total, totalPages: Math.ceil(total / limit), currentPage: page });
+  } catch (err) {
+    console.error('CC all labels error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/tracking-ids  (Command Center) ────────────
+// Returns just tracking ID strings for all labels matching current filters (no pagination)
+router.get('/tracking-ids', authenticateToken, authorizeCC, async (req, res) => {
+  try {
+    const { trackingStatus, carrier, vendorId, userId, dateFrom, dateTo, search } = req.query;
+    const filter = { trackingId: { $exists: true, $ne: '' } };
+    if (carrier) filter.carrier = carrier;
+    if (trackingStatus) {
+      const statuses = String(trackingStatus).split(',').map(s => s.trim()).filter(Boolean);
+      filter.trackingStatus = statuses.length === 1 ? statuses[0] : { $in: statuses };
+    }
+    if (vendorId && isValidObjectId(vendorId)) filter.vendor        = vendorId;
+    if (userId   && isValidObjectId(userId))   filter.user          = userId;
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+    if (search && search.length <= 200) {
+      const escaped = escapeRegex(search);
+      filter.$or = [
+        { trackingId: { $regex: escaped, $options: 'i' } },
+        { from_name:  { $regex: escaped, $options: 'i' } },
+        { to_name:    { $regex: escaped, $options: 'i' } },
+        { to_city:    { $regex: escaped, $options: 'i' } },
+      ];
+    }
+    const labels = await Label.find(filter).select('trackingId').sort({ createdAt: -1 }).lean();
+    const ids = labels.map(l => l.trackingId).filter(Boolean);
+    res.json({ ids, total: ids.length });
+  } catch (err) {
+    console.error('Tracking IDs error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/vendor-stats  (Command Center) ────────────
+// Aggregated delivery stats per vendor name
+router.get('/vendor-stats', authenticateToken, authorizeCC, async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+    const matchStage = {};
+    if (dateFrom || dateTo) {
+      matchStage.createdAt = {};
+      if (dateFrom) matchStage.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   matchStage.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+
+    const pipeline = [
+      ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
+      {
+        $lookup: {
+          from: 'vendors', localField: 'vendor', foreignField: '_id', as: '_v',
+        },
+      },
+      {
+        $addFields: {
+          portalSource: { $ifNull: [{ $arrayElemAt: ['$_v.source', 0] }, 'shippershub'] },
+        },
+      },
+      {
+        $group: {
+          _id:               '$vendorName',
+          carrier:           { $first: '$carrier' },
+          portal:            { $first: '$portalSource' },
+          total:             { $sum: 1 },
+          delivered:         { $sum: { $cond: [{ $eq: ['$trackingStatus', 'delivered'] },          1, 0] } },
+          in_transit:        { $sum: { $cond: [{ $eq: ['$trackingStatus', 'in_transit'] },         1, 0] } },
+          out_for_delivery:  { $sum: { $cond: [{ $eq: ['$trackingStatus', 'out_for_delivery'] },   1, 0] } },
+          exception_problem: { $sum: { $cond: [{ $eq: ['$trackingStatus', 'exception_problem'] },  1, 0] } },
+          returned_to_sender:{ $sum: { $cond: [{ $eq: ['$trackingStatus', 'returned_to_sender'] }, 1, 0] } },
+          pending_pickup:    { $sum: { $cond: [{ $eq: ['$trackingStatus', 'pending_pickup'] },     1, 0] } },
+          delayed:           { $sum: { $cond: [{ $eq: ['$trackingStatus', 'delayed'] },            1, 0] } },
+          not_scanned_yet:   { $sum: { $cond: [{ $in:  ['$trackingStatus', ['not_scanned_yet', null]] }, 1, 0] } },
+          voided:            { $sum: { $cond: [{ $eq: ['$trackingStatus', 'voided'] },             1, 0] } },
+        },
+      },
+      { $sort: { total: -1 } },
+    ];
+
+    const vendors = await Label.aggregate(pipeline);
+    res.json({ vendors });
+  } catch (err) {
+    console.error('Vendor stats error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/daily-stats  (Command Center) ─────────────
+// Labels grouped by creation date with tracking status breakdown
+router.get('/daily-stats', authenticateToken, authorizeCC, async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+    const matchStage = {};
+    if (dateFrom || dateTo) {
+      matchStage.createdAt = {};
+      if (dateFrom) matchStage.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   matchStage.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+
+    const pipeline = [
+      ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          total:             { $sum: 1 },
+          delivered:         { $sum: { $cond: [{ $eq: ['$trackingStatus', 'delivered'] },          1, 0] } },
+          in_transit:        { $sum: { $cond: [{ $eq: ['$trackingStatus', 'in_transit'] },         1, 0] } },
+          out_for_delivery:  { $sum: { $cond: [{ $eq: ['$trackingStatus', 'out_for_delivery'] },   1, 0] } },
+          exception_problem: { $sum: { $cond: [{ $eq: ['$trackingStatus', 'exception_problem'] },  1, 0] } },
+          returned_to_sender:{ $sum: { $cond: [{ $eq: ['$trackingStatus', 'returned_to_sender'] }, 1, 0] } },
+          not_scanned_yet:   { $sum: { $cond: [{ $in:  ['$trackingStatus', ['not_scanned_yet', null]] }, 1, 0] } },
+          voided:            { $sum: { $cond: [{ $eq: ['$trackingStatus', 'voided'] },             1, 0] } },
+        },
+      },
+      { $sort: { _id: -1 } },
+      { $limit: 90 },
+    ];
+
+    const days = await Label.aggregate(pipeline);
+    res.json({ days });
+  } catch (err) {
+    console.error('Daily stats error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/user-stats-bulk  (Command Center) ─────────
+// One aggregation across all labels grouped by user — used by CCUsers table
+router.get('/user-stats-bulk', authenticateToken, authorizeCC, async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+    const matchStage = {};
+    if (dateFrom || dateTo) {
+      matchStage.createdAt = {};
+      if (dateFrom) matchStage.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   matchStage.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+
+    const pipeline = [
+      ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
+      {
+        $group: {
+          _id:               '$user',
+          total:             { $sum: 1 },
+          delivered:         { $sum: { $cond: [{ $eq: ['$trackingStatus', 'delivered'] },         1, 0] } },
+          in_transit:        { $sum: { $cond: [{ $eq: ['$trackingStatus', 'in_transit'] },        1, 0] } },
+          exception_problem: { $sum: { $cond: [{ $eq: ['$trackingStatus', 'exception_problem'] }, 1, 0] } },
+          not_scanned_yet:   { $sum: { $cond: [{ $in: ['$trackingStatus', ['not_scanned_yet', null]] }, 1, 0] } },
+          voided:            { $sum: { $cond: [{ $eq: ['$trackingStatus', 'voided'] },            1, 0] } },
+          spent:             { $sum: '$price' },
+        },
+      },
+    ];
+
+    const rows = await Label.aggregate(pipeline);
+    const statsMap = {};
+    for (const row of rows) {
+      if (row._id) statsMap[row._id.toString()] = {
+        total: row.total, delivered: row.delivered, in_transit: row.in_transit,
+        exception_problem: row.exception_problem, not_scanned_yet: row.not_scanned_yet,
+        voided: row.voided, spent: row.spent,
+      };
+    }
+    res.json({ statsMap });
+  } catch (err) {
+    console.error('User stats bulk error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/user-stats-bulk-reseller ──────────────────
+// Reseller: label stats scoped to their own clients only
+router.get('/user-stats-bulk-reseller', authenticateToken, authorize('admin', 'reseller'), async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+
+    const me = await User.findById(req.user._id).select('clients');
+    const clientIds = me?.clients || [];
+    if (!clientIds.length) return res.json({ statsMap: {} });
+
+    const matchStage = { user: { $in: clientIds } };
+    if (dateFrom || dateTo) {
+      matchStage.createdAt = {};
+      if (dateFrom) matchStage.createdAt.$gte = new Date(dateFrom);
+      if (dateTo)   matchStage.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    }
+
+    const rows = await Label.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id:               '$user',
+          total:             { $sum: 1 },
+          delivered:         { $sum: { $cond: [{ $eq: ['$trackingStatus', 'delivered'] },         1, 0] } },
+          in_transit:        { $sum: { $cond: [{ $eq: ['$trackingStatus', 'in_transit'] },        1, 0] } },
+          exception_problem: { $sum: { $cond: [{ $eq: ['$trackingStatus', 'exception_problem'] }, 1, 0] } },
+          not_scanned_yet:   { $sum: { $cond: [{ $in: ['$trackingStatus', ['not_scanned_yet', null]] }, 1, 0] } },
+          voided:            { $sum: { $cond: [{ $eq: ['$trackingStatus', 'voided'] },            1, 0] } },
+          spent:             { $sum: '$price' },
+        },
+      },
+    ]);
+
+    const statsMap = {};
+    for (const row of rows) {
+      if (row._id) statsMap[row._id.toString()] = {
+        total: row.total, delivered: row.delivered, in_transit: row.in_transit,
+        exception_problem: row.exception_problem, not_scanned_yet: row.not_scanned_yet,
+        voided: row.voided, spent: row.spent,
+      };
+    }
+    res.json({ statsMap });
+  } catch (err) {
+    console.error('Reseller user stats bulk error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── PATCH /api/labels/bulk-tracking-assign  (admin) ───────────
+router.patch('/bulk-tracking-assign', authenticateToken, authorize('admin'), async (req, res) => {
+  try {
+    const { updates } = req.body; // [{ labelId, trackingId }]
+    if (!Array.isArray(updates) || !updates.length) {
+      return res.status(400).json({ message: 'updates array required' });
+    }
+    const ops = updates
+      .filter(u => u.labelId && typeof u.trackingId === 'string' && u.trackingId.trim())
+      .map(u => ({
+        updateOne: {
+          filter: { _id: u.labelId },
+          update: { $set: { trackingId: u.trackingId.trim() } },
+        },
+      }));
+    if (!ops.length) return res.status(400).json({ message: 'No valid updates' });
+    const result = await Label.bulkWrite(ops);
+    res.json({ updated: result.modifiedCount });
+  } catch (err) {
+    console.error('Bulk tracking assign error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/labels/bulk-detail/:bulkJobId ────────────────────
+// Per-label detail for a bulk job (used by history page drawer)
+router.get('/bulk-detail/:bulkJobId', authenticateToken, async (req, res) => {
+  try {
+    const filter = { bulkJobId: req.params.bulkJobId, isBulk: true };
+    if (req.user.role !== 'admin') filter.user = req.user._id;
+    const labels = await Label.find(filter)
+      .select('_id trackingId pdfUrl status trackingStatus from_name to_name to_city to_state to_zip weight price createdAt')
+      .sort({ createdAt: 1 })
+      .lean();
+    res.json({ labels });
+  } catch (err) {
+    console.error('Bulk detail error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ── GET /api/labels/pdf/:filename ─────────────────────────────
 // Serve a locally saved label PDF (authenticated)
 router.get('/pdf/:filename', authenticateToken, (req, res) => {
@@ -816,7 +1322,7 @@ router.get('/pdf/:filename', authenticateToken, (req, res) => {
 // ── Admin: update tracking status on a label ──────────────────────────────────
 const VALID_TRACKING_STATUSES = [
   'not_scanned_yet', 'in_transit', 'out_for_delivery', 'delivered',
-  'exception_problem', 'returned_to_sender', 'pending_pickup', 'delayed',
+  'exception_problem', 'returned_to_sender', 'pending_pickup', 'delayed', 'voided',
 ];
 
 // Normalize various ChatGPT / user-supplied formats to canonical DB keys
@@ -833,13 +1339,13 @@ function normalizeTrackingStatus(raw) {
     'returnedtosender': 'returned_to_sender',
     'pending_pickup': 'pending_pickup', 'pendingpickup': 'pending_pickup',
     'delayed': 'delayed',
+    'voided': 'voided', 'void': 'voided',
   };
   return MAP[s] || null;
 }
 
-router.patch('/:id/tracking-status', authenticateToken, async (req, res) => {
+router.patch('/:id/tracking-status', authenticateToken, authorizeCC, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
     const { trackingStatus, note } = req.body;
     if (!VALID_TRACKING_STATUSES.includes(trackingStatus)) {
       return res.status(400).json({ message: 'Invalid tracking status' });
@@ -866,10 +1372,9 @@ router.patch('/:id/tracking-status', authenticateToken, async (req, res) => {
   }
 });
 
-// ── Admin: bulk update tracking status by tracking ID ─────────────────────────
-router.post('/bulk-status-by-tracking', authenticateToken, async (req, res) => {
+// ── Command Center: bulk update tracking status by tracking ID ────────────────
+router.post('/bulk-status-by-tracking', authenticateToken, authorizeCC, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
     const { updates } = req.body; // [{ trackingId, status }]
     if (!Array.isArray(updates) || updates.length === 0) {
       return res.status(400).json({ message: 'updates must be a non-empty array' });
@@ -889,7 +1394,8 @@ router.post('/bulk-status-by-tracking', authenticateToken, async (req, res) => {
     const grouped = {};   // { status -> [trackingId] }
     const invalidIds = [];
 
-    for (const { trackingId, status } of updates) {
+    for (const { tracking, trackingId: tid, status } of updates) {
+      const trackingId = tracking || tid;
       if (!trackingId) continue;
       const normalized = normalizeTrackingStatus(status);
       if (!normalized) { invalidIds.push(trackingId); continue; }
@@ -927,6 +1433,39 @@ router.post('/bulk-status-by-tracking', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Error in bulk status update' });
+  }
+});
+
+// ── User: mark own label as Voided ────────────────────────────────────────────
+router.patch('/:id/void', authenticateToken, async (req, res) => {
+  try {
+    const label = await Label.findById(req.params.id).select('user trackingStatus');
+    if (!label) return res.status(404).json({ message: 'Label not found' });
+    const isOwner = label.user.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'You can only void your own labels' });
+    }
+    if (label.trackingStatus === 'voided') {
+      return res.status(400).json({ message: 'Label is already voided' });
+    }
+    const historyEntry = {
+      status:    'voided',
+      note:      'Marked as voided by user',
+      updatedAt: new Date(),
+      updatedBy: req.user._id,
+    };
+    const updated = await Label.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set:  { trackingStatus: 'voided' },
+        $push: { trackingStatusHistory: { $each: [historyEntry], $position: 0 } },
+      },
+      { new: true, select: 'trackingStatus trackingStatusHistory' }
+    );
+    res.json({ trackingStatus: updated.trackingStatus, trackingStatusHistory: updated.trackingStatusHistory });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error voiding label' });
   }
 });
 

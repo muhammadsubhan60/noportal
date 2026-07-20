@@ -48,7 +48,8 @@ const Signup: React.FC = () => {
     const { firstName, lastName, email, password, confirmPassword } = formData;
     if (!firstName.trim() || !lastName.trim()) { setLocalError('First and last name are required.'); return; }
     if (password !== confirmPassword) { setLocalError('Passwords do not match.'); return; }
-    if (password.length < 12) { setLocalError('Password must be at least 12 characters.'); return; }
+    if (password.length < 8) { setLocalError('Password must be at least 8 characters.'); return; }
+    if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?~`]/.test(password)) { setLocalError('Password must contain at least one special character.'); return; }
     try { await register({ firstName, lastName, email, password }); } catch {}
   };
 
@@ -110,7 +111,7 @@ const Signup: React.FC = () => {
           name={id}
           type={show ? 'text' : 'password'}
           required
-          minLength={12}
+          minLength={8}
           style={{ ...inputBase, paddingRight: '2.75rem' }}
           placeholder="••••••••"
           value={(formData as Record<string, string>)[id]}
@@ -270,7 +271,7 @@ const Signup: React.FC = () => {
             <PwField id="password" label="Password" show={showPassword} onToggle={() => setShowPassword(!showPassword)} />
             <PwField id="confirmPassword" label="Confirm Password" show={showConfirm} onToggle={() => setShowConfirm(!showConfirm)} />
             <p style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '-0.25rem' }}>
-              Use at least 12 characters for stronger account security.
+              Use at least 8 characters, including one special character, for stronger account security.
             </p>
 
             {displayError && (

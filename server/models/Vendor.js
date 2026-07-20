@@ -63,8 +63,19 @@ const vendorSchema = new mongoose.Schema({
 
   // ── ShipLabel vendor fields (source === 'shiplabel') ──────────
   shiplabelServiceId:   { type: String, default: null }, // service id from /api/v2/services
-  shiplabelLabelSeries: { type: String, default: null }, // e.g. '9505'
-  shiplabelLabelFormat: { type: String, default: null }, // e.g. 'usps_priority_mail'
+  shiplabelLabelSeries: { type: String, default: null }, // legacy single series, e.g. '9505'
+  shiplabelLabelFormat: { type: String, default: null }, // legacy single format, e.g. 'usps_priority_mail'
+  // Multi-series: each entry is a selectable option shown to users. Empty by
+  // default — every existing vendor falls back to the legacy single series/format above.
+  shiplabelSeries: {
+    type: [{
+      series: { type: String, required: true },
+      format: { type: String, required: true },
+      name:   { type: String, default: '' },
+      _id: false,
+    }],
+    default: [],
+  },
 
   // Vendor type: 'api' = non-manifest API label generation | 'manifest' = manual manifest pricing entry
   vendorType: {

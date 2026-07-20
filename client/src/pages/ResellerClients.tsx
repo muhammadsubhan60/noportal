@@ -534,9 +534,9 @@ const ResellerClients: React.FC = () => {
                     {isCreating && (
                       <div>
                         <label className="form-label">Password</label>
-                        <input type="password" required minLength={12} className="form-input" value={clientForm.password}
+                        <input type="password" required minLength={8} className="form-input" value={clientForm.password}
                           onChange={e => setClientForm({ ...clientForm, password: e.target.value })} />
-                        <p style={{ fontSize: '0.72rem', color: 'var(--navy-400)', marginTop: 3 }}>Minimum 12 characters</p>
+                        <p style={{ fontSize: '0.72rem', color: 'var(--navy-400)', marginTop: 3 }}>Minimum 8 characters, including one special character</p>
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: 7, paddingTop: 2 }}>

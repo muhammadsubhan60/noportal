@@ -4,11 +4,12 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   TrophyIcon, PlusIcon, PencilIcon, TrashIcon,
   XMarkIcon, CheckCircleIcon, ExclamationCircleIcon,
-  EyeIcon, EyeSlashIcon, StarIcon,
+  EyeIcon, EyeSlashIcon, ChevronUpIcon,
 } from '@heroicons/react/24/outline';
-import { TrophyIcon as TrophySolid } from '@heroicons/react/24/solid';
 
-// ── Types ──────────────────────────────────────────────────────
+const FONT = "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 interface Entry {
   _id: string;
   vendorName: string;
@@ -29,292 +30,266 @@ interface VendorOption {
   source: string;
 }
 
-// ── Portal config ──────────────────────────────────────────────
+// ── Config ─────────────────────────────────────────────────────────────────────
 const PORTAL_CFG = {
-  shippershub: { label: 'ShippersHub', accent: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE', light: '#DBEAFE' },
-  labelcrow:   { label: 'Label Crow',  accent: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE', light: '#EDE9FE' },
-  shiplabel:   { label: 'ShipLabel',   accent: '#059669', bg: '#ECFDF5', border: '#A7F3D0', light: '#D1FAE5' },
+  shippershub: { label: 'ShippersHub', accent: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE' },
+  labelcrow:   { label: 'Label Crow',  accent: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' },
+  shiplabel:   { label: 'ShipLabel',   accent: '#059669', bg: '#ECFDF5', border: '#A7F3D0' },
+};
+
+const RANK_STYLE: Record<number, { color: string; bg: string; border: string; label: string }> = {
+  1: { color: '#B45309', bg: '#FFFBEB', border: '#FDE68A', label: 'Gold'   },
+  2: { color: '#475569', bg: '#F8FAFC', border: '#CBD5E1', label: 'Silver' },
+  3: { color: '#7C3500', bg: '#FFF7ED', border: '#FDBA74', label: 'Bronze' },
 };
 
 const BLANK_FORM = {
-  vendorId:        '',
-  vendorName:      '',
-  portal:          'shippershub' as Entry['portal'],
-  carrier:         'USPS',
-  shippingService: '',
-  successRate:     '',
-  totalLabels:     '',
-  isVisible:       true,
+  vendorId: '', vendorName: '',
+  portal: 'shippershub' as Entry['portal'],
+  carrier: 'USPS', shippingService: '',
+  successRate: '', totalLabels: '', isVisible: true,
 };
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function getInitials(name: string) {
   return name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
 }
-
 function rateColor(r: number) {
   if (r >= 90) return '#059669';
   if (r >= 70) return '#D97706';
   return '#DC2626';
 }
-
-function rateBarColor(r: number) {
+function rateBarBg(r: number) {
   if (r >= 90) return 'linear-gradient(90deg,#10B981,#34D399)';
   if (r >= 70) return 'linear-gradient(90deg,#F59E0B,#FCD34D)';
   return 'linear-gradient(90deg,#EF4444,#F87171)';
 }
 
-const RANK_MEDAL: Record<number, { emoji: string; label: string; color: string; glow: string }> = {
-  1: { emoji: '🥇', label: '1st', color: '#B45309', glow: 'rgba(245,158,11,0.25)' },
-  2: { emoji: '🥈', label: '2nd', color: '#475569', glow: 'rgba(148,163,184,0.25)' },
-  3: { emoji: '🥉', label: '3rd', color: '#92400E', glow: 'rgba(180,83,9,0.2)'  },
-};
-
-// ── Modal ──────────────────────────────────────────────────────
-const Modal = ({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) => (
-  <div
-    onClick={e => e.target === e.currentTarget && onClose()}
-    style={{
-      position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.55)',
-      backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center',
-      justifyContent: 'center', zIndex: 1000, padding: '1rem',
-    }}
-  >
-    <div className="sh-card" style={{ width: '100%', maxWidth: 480, padding: '1.75rem', maxHeight: '90vh', overflowY: 'auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--navy-900)' }}>{title}</h2>
-        <button onClick={onClose} style={{ background: 'var(--navy-100)', border: 'none', cursor: 'pointer', color: 'var(--navy-500)', padding: 6, borderRadius: 8, display: 'flex', alignItems: 'center' }}>
-          <XMarkIcon style={{ width: 16, height: 16 }} />
-        </button>
-      </div>
-      {children}
-    </div>
+// ── Shared label ───────────────────────────────────────────────────────────────
+const SLabel = ({ text, accent = 'var(--accent-500)' }: { text: string; accent?: string }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+    <div style={{ width: 3, height: 13, borderRadius: 3, background: accent, flexShrink: 0 }} />
+    <span style={{ fontSize: '0.67rem', fontWeight: 700, color: 'var(--navy-500)', textTransform: 'uppercase', letterSpacing: '0.09em', fontFamily: FONT }}>
+      {text}
+    </span>
   </div>
 );
 
-// ── Podium Card (top 3) ────────────────────────────────────────
-const PodiumCard = ({ entry, rank }: { entry: Entry; rank: number }) => {
-  const medal = RANK_MEDAL[rank];
-  const initials = getInitials(entry.vendorName);
-  const avatarColors = [
-    ['#FEF3C7', '#B45309'],
-    ['#E2E8F0', '#475569'],
-    ['#FED7AA', '#92400E'],
-  ];
-  const [avatarBg, avatarFg] = avatarColors[rank - 1] ?? ['#EFF6FF', '#1D4ED8'];
-
-  return (
-    <div style={{
-      flex: 1, minWidth: 0,
-      background: 'var(--bg-card)',
-      borderRadius: 'var(--radius-xl)',
-      boxShadow: rank === 1
-        ? `0 0 0 2px #F59E0B40, 0 8px 24px -4px rgba(245,158,11,0.18), var(--shadow-md)`
-        : 'var(--shadow-card)',
-      border: rank === 1 ? '1.5px solid #FCD34D' : '1px solid rgba(0,0,0,0.06)',
-      padding: '1.5rem 1.25rem',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: '0.75rem',
-      position: 'relative',
-      overflow: 'hidden',
-      transition: 'transform 0.15s, box-shadow 0.15s',
-    }}
-      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ''; }}
-    >
-      {rank === 1 && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-          background: 'linear-gradient(90deg,#F59E0B,#FCD34D,#F59E0B)',
-        }} />
-      )}
-
-      {/* Medal */}
-      <div style={{ fontSize: '1.75rem', lineHeight: 1 }}>{medal.emoji}</div>
-
-      {/* Avatar */}
-      <div style={{
-        width: 52, height: 52, borderRadius: '50%',
-        background: avatarBg, color: avatarFg,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontWeight: 900, fontSize: '1.1rem',
-        boxShadow: `0 0 0 3px ${medal.glow}`,
-      }}>
-        {initials}
-      </div>
-
-      {/* Name */}
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--navy-900)', lineHeight: 1.3 }}>
-          {entry.vendorName}
-        </div>
-        {entry.shippingService && (
-          <div style={{ fontSize: '0.7rem', color: 'var(--navy-400)', marginTop: 2 }}>
-            {entry.carrier} · {entry.shippingService}
-          </div>
-        )}
-      </div>
-
-      {/* Rate */}
-      <div style={{
-        fontSize: '2rem', fontWeight: 900,
-        color: rateColor(entry.successRate),
-        lineHeight: 1,
-      }}>
-        {entry.successRate}%
-      </div>
-
-      {/* Bar */}
-      <div style={{ width: '100%', height: 6, background: 'var(--navy-100)', borderRadius: 99, overflow: 'hidden' }}>
-        <div style={{
-          height: '100%', borderRadius: 99,
-          width: `${entry.successRate}%`,
-          background: rateBarColor(entry.successRate),
-          transition: 'width 0.6s cubic-bezier(0.4,0,0.2,1)',
-        }} />
-      </div>
-
-      {/* Labels count */}
-      {entry.totalLabels > 0 && (
-        <div style={{ fontSize: '0.72rem', color: 'var(--navy-400)', fontWeight: 600 }}>
-          {entry.totalLabels.toLocaleString()} labels
-        </div>
-      )}
-
-      {/* Portal badge */}
-      <div style={{
-        padding: '3px 10px', borderRadius: 99, fontSize: '0.67rem', fontWeight: 800,
-        background: PORTAL_CFG[entry.portal].bg,
-        color: PORTAL_CFG[entry.portal].accent,
-        border: `1.5px solid ${PORTAL_CFG[entry.portal].border}`,
-      }}>
-        {PORTAL_CFG[entry.portal].label}
-      </div>
+// ── Rate bar ───────────────────────────────────────────────────────────────────
+const RateBar = ({ rate, width = 100 }: { rate: number; width?: number }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, width }}>
+    <div style={{ flex: 1, height: 4, background: 'var(--navy-100)', borderRadius: 99, overflow: 'hidden' }}>
+      <div style={{ width: `${rate}%`, height: '100%', background: rateBarBg(rate), borderRadius: 99, transition: 'width 0.5s ease' }} />
     </div>
-  );
-};
+    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: rateColor(rate), minWidth: 42, textAlign: 'right', fontFamily: FONT, letterSpacing: '-0.02em' }}>
+      {rate}%
+    </span>
+  </div>
+);
 
-// ── Row Card (rank 4+) ─────────────────────────────────────────
-const RowCard = ({
-  entry, rank, isAdmin, onEdit, onDelete, onToggle,
-}: {
-  entry: Entry; rank: number; isAdmin: boolean;
+// ── Admin icon button ──────────────────────────────────────────────────────────
+const IconBtn = ({ onClick, title, children, danger }: {
+  onClick: () => void; title: string; children: React.ReactNode; danger?: boolean;
+}) => (
+  <button
+    onClick={onClick} title={title}
+    style={{
+      background: 'none', border: 'none', cursor: 'pointer', padding: '4px 5px',
+      borderRadius: 6, display: 'flex', alignItems: 'center',
+      color: danger ? 'var(--danger-500)' : 'var(--navy-400)',
+      transition: 'color 0.12s, background 0.12s',
+    }}
+    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = danger ? '#FEF2F2' : 'var(--navy-50)'; (e.currentTarget as HTMLButtonElement).style.color = danger ? '#DC2626' : 'var(--navy-700)'; }}
+    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; (e.currentTarget as HTMLButtonElement).style.color = danger ? 'var(--danger-500)' : 'var(--navy-400)'; }}
+  >
+    {children}
+  </button>
+);
+
+// ── Top-3 featured card ────────────────────────────────────────────────────────
+const FeaturedRow = ({ entry, rank, isAdmin, portalLabels, onEdit, onDelete, onToggle }: {
+  entry: Entry; rank: number; isAdmin: boolean; portalLabels: Record<string, string>;
   onEdit: () => void; onDelete: () => void; onToggle: () => void;
 }) => {
-  const initials = getInitials(entry.vendorName);
+  const rs = RANK_STYLE[rank];
+  const portal = PORTAL_CFG[entry.portal];
+  const [hov, setHov] = useState(false);
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '1rem',
-      padding: '0.875rem 1.25rem',
-      background: 'var(--bg-card)',
-      borderRadius: 'var(--radius-lg)',
-      boxShadow: 'var(--shadow-card)',
-      border: '1px solid rgba(0,0,0,0.05)',
-      opacity: entry.isVisible ? 1 : 0.5,
-      transition: 'box-shadow 0.15s, transform 0.15s',
-    }}
-      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = 'var(--shadow-md)'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = 'var(--shadow-card)'; }}
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '1.25rem',
+        padding: '1.1rem 1.4rem',
+        background: 'var(--bg-card)',
+        border: `1px solid ${rank === 1 ? '#FDE68A' : 'var(--navy-150, #e8edf5)'}`,
+        borderLeft: `3px solid ${rs.color}`,
+        borderRadius: 14,
+        opacity: entry.isVisible ? 1 : 0.45,
+        transition: 'box-shadow 0.15s',
+        boxShadow: hov ? 'var(--shadow-lg)' : rank === 1 ? '0 4px 16px rgba(245,158,11,0.1)' : 'var(--shadow-card)',
+        fontFamily: FONT,
+      }}
     >
-      {/* Rank */}
+      {/* Rank number */}
       <div style={{
-        width: 36, flexShrink: 0, textAlign: 'center',
-        fontWeight: 900, fontSize: '0.95rem', color: 'var(--navy-400)',
-      }}>
-        #{rank}
-      </div>
-
-      {/* Avatar */}
-      <div style={{
-        width: 38, height: 38, flexShrink: 0, borderRadius: '50%',
-        background: 'var(--navy-100)', color: 'var(--navy-600)',
+        width: 44, height: 44, borderRadius: 11, flexShrink: 0,
+        background: rs.bg, border: `1px solid ${rs.border}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontWeight: 800, fontSize: '0.8rem',
       }}>
-        {initials}
+        <span style={{ fontSize: '1rem', fontWeight: 900, color: rs.color, letterSpacing: '-0.04em', lineHeight: 1 }}>
+          0{rank}
+        </span>
       </div>
 
-      {/* Name + service */}
+      {/* Vendor info */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--navy-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {entry.vendorName}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--navy-900)', letterSpacing: '-0.01em' }}>
+            {entry.vendorName}
+          </span>
+          <span style={{
+            fontSize: '0.62rem', fontWeight: 700, padding: '2px 7px', borderRadius: 99,
+            background: portal.bg, color: portal.accent, border: `1px solid ${portal.border}`,
+            letterSpacing: '0.03em',
+          }}>
+            {portalLabels[entry.portal] || portal.label}
+          </span>
+          {!entry.isVisible && isAdmin && (
+            <span style={{ fontSize: '0.62rem', fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: 'var(--navy-100)', color: 'var(--navy-400)' }}>Hidden</span>
+          )}
         </div>
-        {entry.shippingService && (
-          <div style={{ fontSize: '0.7rem', color: 'var(--navy-400)', marginTop: 1 }}>
-            {entry.carrier} · {entry.shippingService}
+        <div style={{ fontSize: '0.72rem', color: 'var(--navy-500)' }}>
+          {entry.carrier}{entry.shippingService ? ` · ${entry.shippingService}` : ''}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1.75rem', flexShrink: 0 }}>
+        {entry.totalLabels > 0 && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--navy-800)', letterSpacing: '-0.02em' }}>
+              {entry.totalLabels.toLocaleString()}
+            </div>
+            <div style={{ fontSize: '0.6rem', color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginTop: 1 }}>Labels</div>
           </div>
         )}
-      </div>
-
-      {/* Portal badge */}
-      <div style={{ flexShrink: 0, display: 'none' }} className="lb-portal-badge">
-        <span style={{
-          padding: '3px 9px', borderRadius: 99, fontSize: '0.67rem', fontWeight: 800,
-          background: PORTAL_CFG[entry.portal].bg,
-          color: PORTAL_CFG[entry.portal].accent,
-          border: `1.5px solid ${PORTAL_CFG[entry.portal].border}`,
-          whiteSpace: 'nowrap',
-        }}>
-          {PORTAL_CFG[entry.portal].label}
-        </span>
-      </div>
-
-      {/* Success rate */}
-      <div style={{ flexShrink: 0, width: 120, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ flex: 1, height: 5, background: 'var(--navy-100)', borderRadius: 99, overflow: 'hidden' }}>
-          <div style={{
-            height: '100%', borderRadius: 99, width: `${entry.successRate}%`,
-            background: rateBarColor(entry.successRate),
-            transition: 'width 0.5s ease',
-          }} />
-        </div>
-        <span style={{ fontWeight: 800, fontSize: '0.875rem', color: rateColor(entry.successRate), flexShrink: 0, minWidth: 40, textAlign: 'right' }}>
-          {entry.successRate}%
-        </span>
-      </div>
-
-      {/* Labels */}
-      <div style={{ flexShrink: 0, minWidth: 64, textAlign: 'right' }}>
-        {entry.totalLabels > 0 ? (
-          <span style={{ fontWeight: 600, fontSize: '0.8rem', color: 'var(--navy-700)' }}>
-            {entry.totalLabels.toLocaleString()}
-          </span>
-        ) : (
-          <span style={{ color: 'var(--navy-300)', fontSize: '0.8rem' }}>—</span>
-        )}
+        <RateBar rate={entry.successRate} width={160} />
       </div>
 
       {/* Admin controls */}
       {isAdmin && (
-        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-          <button onClick={onToggle}
-            title={entry.isVisible ? 'Visible — click to hide' : 'Hidden — click to show'}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 5, borderRadius: 6, color: entry.isVisible ? '#059669' : 'var(--navy-300)', display: 'flex', alignItems: 'center' }}>
-            {entry.isVisible ? <EyeIcon style={{ width: 15, height: 15 }} /> : <EyeSlashIcon style={{ width: 15, height: 15 }} />}
-          </button>
-          <button onClick={onEdit}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-600)', padding: 5, borderRadius: 6, display: 'flex', alignItems: 'center' }}>
-            <PencilIcon style={{ width: 14, height: 14 }} />
-          </button>
-          <button onClick={onDelete}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger-500)', padding: 5, borderRadius: 6, display: 'flex', alignItems: 'center' }}>
-            <TrashIcon style={{ width: 14, height: 14 }} />
-          </button>
+        <div style={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+          <IconBtn onClick={onToggle} title={entry.isVisible ? 'Hide' : 'Show'}>
+            {entry.isVisible
+              ? <EyeIcon style={{ width: 14, height: 14, color: '#059669' }} />
+              : <EyeSlashIcon style={{ width: 14, height: 14 }} />}
+          </IconBtn>
+          <IconBtn onClick={onEdit} title="Edit"><PencilIcon style={{ width: 13, height: 13 }} /></IconBtn>
+          <IconBtn onClick={onDelete} title="Delete" danger><TrashIcon style={{ width: 13, height: 13 }} /></IconBtn>
         </div>
       )}
     </div>
   );
 };
 
-// ── Main Component ─────────────────────────────────────────────
+// ── Regular rank row ───────────────────────────────────────────────────────────
+const RankRow = ({ entry, rank, isAdmin, portalLabels, onEdit, onDelete, onToggle, delay }: {
+  entry: Entry; rank: number; isAdmin: boolean; portalLabels: Record<string, string>;
+  onEdit: () => void; onDelete: () => void; onToggle: () => void; delay?: number;
+}) => {
+  const [hov, setHov] = useState(false);
+  const portal = PORTAL_CFG[entry.portal];
+
+  return (
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '1rem',
+        padding: '0.75rem 1.2rem',
+        background: hov ? 'var(--navy-50)' : 'transparent',
+        borderBottom: '1px solid var(--navy-50)',
+        opacity: entry.isVisible ? 1 : 0.45,
+        transition: 'background 0.12s',
+        fontFamily: FONT,
+      }}
+    >
+      {/* Rank */}
+      <div style={{ width: 32, flexShrink: 0, textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: 'var(--navy-400)', letterSpacing: '-0.01em' }}>
+        {rank}
+      </div>
+
+      {/* Initials monogram */}
+      <div style={{
+        width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+        background: 'var(--navy-100)', color: 'var(--navy-500)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontWeight: 800, fontSize: '0.7rem', letterSpacing: '0.02em',
+      }}>
+        {getInitials(entry.vendorName)}
+      </div>
+
+      {/* Name + service */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: '0.83rem', color: 'var(--navy-800)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {entry.vendorName}
+        </div>
+        <div style={{ fontSize: '0.68rem', color: 'var(--navy-400)', marginTop: 1 }}>
+          {entry.carrier}{entry.shippingService ? ` · ${entry.shippingService}` : ''}
+        </div>
+      </div>
+
+      {/* Portal badge */}
+      <span style={{
+        fontSize: '0.62rem', fontWeight: 700, padding: '2px 7px', borderRadius: 99, flexShrink: 0,
+        background: portal.bg, color: portal.accent, border: `1px solid ${portal.border}`,
+      }}>
+        {portalLabels[entry.portal] || portal.label}
+      </span>
+
+      {/* Rate bar */}
+      <div style={{ flexShrink: 0 }}>
+        <RateBar rate={entry.successRate} width={150} />
+      </div>
+
+      {/* Labels */}
+      <div style={{ flexShrink: 0, minWidth: 60, textAlign: 'right' }}>
+        {entry.totalLabels > 0
+          ? <span style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--navy-700)' }}>{entry.totalLabels.toLocaleString()}</span>
+          : <span style={{ color: 'var(--navy-300)', fontSize: '0.78rem' }}>—</span>}
+      </div>
+
+      {/* Admin controls */}
+      {isAdmin && (
+        <div style={{ display: 'flex', gap: 0, flexShrink: 0 }}>
+          <IconBtn onClick={onToggle} title={entry.isVisible ? 'Hide' : 'Show'}>
+            {entry.isVisible
+              ? <EyeIcon style={{ width: 13, height: 13, color: '#059669' }} />
+              : <EyeSlashIcon style={{ width: 13, height: 13 }} />}
+          </IconBtn>
+          <IconBtn onClick={onEdit} title="Edit"><PencilIcon style={{ width: 12, height: 12 }} /></IconBtn>
+          <IconBtn onClick={onDelete} title="Delete" danger><TrashIcon style={{ width: 12, height: 12 }} /></IconBtn>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Main component ─────────────────────────────────────────────────────────────
 const Leaderboard: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   const [entries,      setEntries]      = useState<Entry[]>([]);
+  // Reseller white-label portal names — defaults to the raw brand until the fetch
+  // resolves (matches the fallback behavior itself, so there's no flash to fix).
+  const [portalLabels, setPortalLabels] = useState<Record<string, string>>({
+    shippershub: PORTAL_CFG.shippershub.label,
+    labelcrow:   PORTAL_CFG.labelcrow.label,
+    shiplabel:   PORTAL_CFG.shiplabel.label,
+  });
   const [loading,      setLoading]      = useState(true);
   const [filterPortal, setFilterPortal] = useState<Entry['portal'] | 'all'>('all');
   const [showModal,    setShowModal]    = useState(false);
@@ -332,10 +307,10 @@ const Leaderboard: React.FC = () => {
   const fetchEntries = async () => {
     setLoading(true);
     try {
-      const url = isAdmin ? '/leaderboard/all' : '/leaderboard';
-      const res = await axios.get(url);
+      const res = await axios.get(isAdmin ? '/leaderboard/all' : '/leaderboard');
       setEntries(res.data.entries || []);
-    } catch { /* ignore */ }
+      if (res.data.portalLabels) setPortalLabels(res.data.portalLabels);
+    } catch {}
     finally { setLoading(false); }
   };
 
@@ -343,7 +318,7 @@ const Leaderboard: React.FC = () => {
     try {
       const res = await axios.get('/leaderboard/vendors');
       setVendorOpts(res.data.vendors || []);
-    } catch { /* ignore */ }
+    } catch {}
   };
 
   useEffect(() => {
@@ -358,19 +333,10 @@ const Leaderboard: React.FC = () => {
     setForm(f => ({ ...f, vendorId, vendorName: v.name, portal, carrier: v.carrier, shippingService: v.shippingService || '' }));
   };
 
-  const openAdd = () => { setEditEntry(null); setForm({ ...BLANK_FORM }); setShowModal(true); };
+  const openAdd  = () => { setEditEntry(null); setForm({ ...BLANK_FORM }); setShowModal(true); };
   const openEdit = (e: Entry) => {
     setEditEntry(e);
-    setForm({
-      vendorId:        e.vendor || '',
-      vendorName:      e.vendorName,
-      portal:          e.portal,
-      carrier:         e.carrier,
-      shippingService: e.shippingService,
-      successRate:     String(e.successRate),
-      totalLabels:     String(e.totalLabels),
-      isVisible:       e.isVisible,
-    });
+    setForm({ vendorId: e.vendor || '', vendorName: e.vendorName, portal: e.portal, carrier: e.carrier, shippingService: e.shippingService, successRate: String(e.successRate), totalLabels: String(e.totalLabels), isVisible: e.isVisible });
     setShowModal(true);
   };
 
@@ -380,47 +346,27 @@ const Leaderboard: React.FC = () => {
     if (isNaN(rate) || rate < 0 || rate > 100) { notify('Success rate must be 0–100', true); return; }
     setSaving(true);
     try {
-      const payload = {
-        vendorName:      form.vendorName.trim(),
-        portal:          form.portal,
-        carrier:         form.carrier || 'USPS',
-        shippingService: form.shippingService,
-        successRate:     rate,
-        totalLabels:     parseInt(form.totalLabels) || 0,
-        isVisible:       form.isVisible,
-        vendorId:        form.vendorId || null,
-      };
-      if (editEntry) {
-        await axios.put(`/leaderboard/${editEntry._id}`, payload);
-        notify('Entry updated');
-      } else {
-        await axios.post('/leaderboard', payload);
-        notify('Entry added');
-      }
+      const payload = { vendorName: form.vendorName.trim(), portal: form.portal, carrier: form.carrier || 'USPS', shippingService: form.shippingService, successRate: rate, totalLabels: parseInt(form.totalLabels) || 0, isVisible: form.isVisible, vendorId: form.vendorId || null };
+      if (editEntry) await axios.put(`/leaderboard/${editEntry._id}`, payload);
+      else           await axios.post('/leaderboard', payload);
+      notify(editEntry ? 'Entry updated' : 'Entry added');
       setShowModal(false);
       fetchEntries();
-    } catch (err: any) {
-      notify(err.response?.data?.message || 'Save failed', true);
-    } finally { setSaving(false); }
+    } catch (err: any) { notify(err.response?.data?.message || 'Save failed', true); }
+    finally { setSaving(false); }
   };
 
   const handleDelete = async (e: Entry) => {
     if (!window.confirm(`Remove "${e.vendorName}" from the leaderboard?`)) return;
-    try {
-      await axios.delete(`/leaderboard/${e._id}`);
-      notify('Entry removed');
-      fetchEntries();
-    } catch (err: any) { notify(err.response?.data?.message || 'Delete failed', true); }
+    try { await axios.delete(`/leaderboard/${e._id}`); notify('Entry removed'); fetchEntries(); }
+    catch (err: any) { notify(err.response?.data?.message || 'Delete failed', true); }
   };
 
-  const handleToggleVisibility = async (e: Entry) => {
-    try {
-      await axios.put(`/leaderboard/${e._id}`, { isVisible: !e.isVisible });
-      fetchEntries();
-    } catch { notify('Update failed', true); }
+  const handleToggle = async (e: Entry) => {
+    try { await axios.put(`/leaderboard/${e._id}`, { isVisible: !e.isVisible }); fetchEntries(); }
+    catch { notify('Update failed', true); }
   };
 
-  // Sorted + filtered
   const sorted = entries
     .filter(e => filterPortal === 'all' || e.portal === filterPortal)
     .sort((a, b) => b.successRate - a.successRate || b.totalLabels - a.totalLabels);
@@ -428,103 +374,83 @@ const Leaderboard: React.FC = () => {
   const top3 = sorted.slice(0, 3);
   const rest = sorted.slice(3);
 
-  // Counts per portal (visible entries only)
+  const totalVisible = entries.filter(e => e.isVisible).length;
   const portalCounts = (['shippershub', 'labelcrow', 'shiplabel'] as const).reduce((acc, p) => {
     acc[p] = entries.filter(e => e.portal === p && e.isVisible).length;
     return acc;
   }, {} as Record<string, number>);
-  const totalVisible = entries.filter(e => e.isVisible).length;
+
+  const avgRate = entries.length > 0
+    ? (entries.reduce((s, e) => s + e.successRate, 0) / entries.length).toFixed(1)
+    : '—';
 
   return (
     <>
-      {/* Leaderboard-specific layout tweaks */}
       <style>{`
-        @media (min-width: 600px) { .lb-portal-badge { display: block !important; } }
-        @keyframes lb-slide-up { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
-        .lb-animate { animation: lb-slide-up 0.3s ease both; }
+        @keyframes lb-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .lb-row { animation: lb-in 0.25s ease both; }
       `}</style>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} className="animate-fadeIn">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontFamily: FONT }} className="animate-fadeIn">
 
-        {/* ── Hero header ──────────────────────────────────── */}
+        {/* ── Hero ───────────────────────────────────────────────────────────── */}
         <div style={{
-          background: 'linear-gradient(135deg, var(--navy-900) 0%, var(--navy-800) 100%)',
-          borderRadius: 'var(--radius-xl)',
-          padding: '1.75rem 2rem',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16,
-          boxShadow: '0 8px 24px -4px rgba(15,23,42,0.35)',
+          background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 58%, #1e3a8a 100%)',
+          borderRadius: 18, padding: '1.4rem 2rem',
           position: 'relative', overflow: 'hidden',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1.5rem',
         }}>
-          {/* decorative glow */}
-          <div style={{
-            position: 'absolute', top: -40, right: -40, width: 180, height: 180,
-            background: 'radial-gradient(circle, rgba(245,158,11,0.15) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          }} />
+          <div style={{ position: 'absolute', inset: 0, opacity: 0.06, backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '22px 22px', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', top: '-40%', right: '-5%', width: 240, height: 240, background: 'radial-gradient(circle, rgba(245,158,11,0.1) 0%, transparent 70%)', pointerEvents: 'none' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{
-              width: 52, height: 52, borderRadius: 'var(--radius-lg)',
-              background: 'rgba(245,158,11,0.15)',
-              border: '1.5px solid rgba(245,158,11,0.3)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0,
-            }}>
-              <TrophySolid style={{ width: 26, height: 26, color: '#F59E0B' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', position: 'relative', zIndex: 1 }}>
+            <div style={{ width: 46, height: 46, borderRadius: 12, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <TrophyIcon style={{ width: 22, height: 22, color: '#F59E0B' }} />
             </div>
             <div>
-              <h1 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 900, color: '#fff', letterSpacing: '-0.02em' }}>
-                Vendor Leaderboard
+              <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.03em', lineHeight: 1.1 }}>
+                Performance Rankings
               </h1>
-              <p style={{ margin: '3px 0 0', fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)' }}>
-                Best-performing portals and vendors — curated by admin
+              <p style={{ margin: '3px 0 0', fontSize: '0.76rem', color: 'rgba(148,163,184,0.65)' }}>
+                Vendor success rates — curated by the platform team
               </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', gap: '1.25rem' }}>
-              {[
-                { label: 'Total Vendors', value: totalVisible },
-                { label: 'Portals', value: 3 },
-              ].map(s => (
-                <div key={s.label} style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#F59E0B', lineHeight: 1 }}>{s.value}</div>
-                  <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.45)', marginTop: 2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
-                </div>
-              ))}
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', position: 'relative', zIndex: 1 }}>
+            {[
+              { label: 'Vendors',  value: totalVisible },
+              { label: 'Avg Rate', value: `${avgRate}%` },
+              { label: 'Portals',  value: 3 },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ textAlign: 'center', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '0.5rem 0.9rem', minWidth: 64 }}>
+                <div style={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#F59E0B', letterSpacing: '-0.02em' }}>{value}</div>
+              </div>
+            ))}
             {isAdmin && (
-              <button className="btn btn-primary" onClick={openAdd} style={{ flexShrink: 0 }}>
-                <PlusIcon style={{ width: 15, height: 15 }} /> Add Entry
+              <button className="btn btn-primary" onClick={openAdd} style={{ flexShrink: 0, fontFamily: FONT, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <PlusIcon style={{ width: 14, height: 14 }} /> Add Entry
               </button>
             )}
           </div>
         </div>
 
-        {/* ── Toast ─────────────────────────────────────────── */}
+        {/* ── Toast ──────────────────────────────────────────────────────────── */}
         {toast && (
-          <div className={`alert ${toast.err ? 'alert-danger' : 'alert-success'}`}
-            style={{ padding: '0.5rem 0.875rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-            {toast.err
-              ? <ExclamationCircleIcon style={{ width: 15, height: 15 }} />
-              : <CheckCircleIcon style={{ width: 15, height: 15 }} />}
-            <span style={{ fontSize: '0.82rem' }}>{toast.msg}</span>
+          <div className={`alert ${toast.err ? 'alert-danger' : 'alert-success'}`} style={{ padding: '0.55rem 0.9rem' }}>
+            {toast.err ? <ExclamationCircleIcon style={{ width: 14, height: 14, flexShrink: 0 }} /> : <CheckCircleIcon style={{ width: 14, height: 14, flexShrink: 0 }} />}
+            <span style={{ fontSize: '0.8rem', fontFamily: FONT }}>{toast.msg}</span>
           </div>
         )}
 
-        {/* ── Portal tabs ───────────────────────────────────── */}
-        <div style={{
-          display: 'flex', gap: 4, background: 'var(--bg-card)',
-          padding: 4, borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-card)', border: '1px solid rgba(0,0,0,0.05)',
-          overflowX: 'auto',
-        }}>
+        {/* ── Portal filter tabs ──────────────────────────────────────────────── */}
+        <div style={{ display: 'flex', gap: 3, background: 'var(--navy-100)', padding: 3, borderRadius: 11, overflowX: 'auto' }}>
           {([
-            { key: 'all', label: 'All Portals', count: totalVisible, accent: 'var(--navy-700)', bg: 'var(--navy-900)' },
-            { key: 'shippershub', label: PORTAL_CFG.shippershub.label, count: portalCounts.shippershub, accent: PORTAL_CFG.shippershub.accent, bg: PORTAL_CFG.shippershub.accent },
-            { key: 'labelcrow',   label: PORTAL_CFG.labelcrow.label,   count: portalCounts.labelcrow,   accent: PORTAL_CFG.labelcrow.accent,   bg: PORTAL_CFG.labelcrow.accent },
-            { key: 'shiplabel',   label: PORTAL_CFG.shiplabel.label,   count: portalCounts.shiplabel,   accent: PORTAL_CFG.shiplabel.accent,   bg: PORTAL_CFG.shiplabel.accent },
+            { key: 'all',         label: 'All Portals',           count: totalVisible,              accent: 'var(--navy-900)' },
+            { key: 'shippershub', label: portalLabels.shippershub, count: portalCounts.shippershub, accent: PORTAL_CFG.shippershub.accent },
+            { key: 'labelcrow',   label: portalLabels.labelcrow,   count: portalCounts.labelcrow,   accent: PORTAL_CFG.labelcrow.accent },
+            { key: 'shiplabel',   label: portalLabels.shiplabel,   count: portalCounts.shiplabel,   accent: PORTAL_CFG.shiplabel.accent },
           ] as const).map(tab => {
             const active = filterPortal === tab.key;
             return (
@@ -532,21 +458,21 @@ const Leaderboard: React.FC = () => {
                 key={tab.key}
                 onClick={() => setFilterPortal(tab.key as typeof filterPortal)}
                 style={{
-                  flex: '1 0 auto', padding: '0.5rem 0.875rem', borderRadius: 10,
+                  flex: '1 0 auto', padding: '0.45rem 0.9rem', borderRadius: 8,
                   border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
-                  background: active ? tab.bg : 'transparent',
-                  color: active ? '#fff' : 'var(--navy-500)',
-                  fontWeight: 700, fontSize: '0.8rem',
+                  background: active ? 'var(--bg-card)' : 'transparent',
+                  color: active ? tab.accent : 'var(--navy-500)',
+                  fontWeight: active ? 700 : 600, fontSize: '0.78rem',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  transition: 'all 0.15s',
-                  boxShadow: active ? '0 2px 8px rgba(0,0,0,0.18)' : 'none',
+                  boxShadow: active ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                  transition: 'all 0.15s', fontFamily: FONT,
                 }}
               >
                 {tab.label}
                 <span style={{
-                  fontSize: '0.65rem', fontWeight: 800, lineHeight: 1,
-                  background: active ? 'rgba(255,255,255,0.2)' : 'var(--navy-100)',
-                  color: active ? '#fff' : 'var(--navy-500)',
+                  fontSize: '0.63rem', fontWeight: 700, lineHeight: 1,
+                  background: active ? `${tab.accent}18` : 'rgba(0,0,0,0.06)',
+                  color: active ? tab.accent : 'var(--navy-400)',
                   padding: '2px 6px', borderRadius: 99,
                 }}>
                   {tab.count}
@@ -556,225 +482,185 @@ const Leaderboard: React.FC = () => {
           })}
         </div>
 
-        {/* ── Body ──────────────────────────────────────────── */}
+        {/* ── Body ───────────────────────────────────────────────────────────── */}
         {loading ? (
-          <div className="sh-card" style={{ display: 'flex', justifyContent: 'center', padding: '5rem' }}>
+          <div className="db-card" style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
             <div className="spinner" />
           </div>
         ) : sorted.length === 0 ? (
-          <div className="sh-card">
-            <div className="empty-state" style={{ padding: '4rem 1rem' }}>
-              <TrophyIcon style={{ width: 44, height: 44, color: '#FCD34D' }} />
-              <h3>No leaderboard entries yet</h3>
-              {isAdmin
-                ? <p>Click <strong>Add Entry</strong> to set up the first vendor ranking.</p>
-                : <p>Check back soon — the admin is setting up vendor rankings.</p>}
-            </div>
+          <div className="db-card" style={{ padding: '4rem 2rem', textAlign: 'center' }}>
+            <TrophyIcon style={{ width: 36, height: 36, color: 'var(--navy-300)', margin: '0 auto 12px' }} />
+            <h3 style={{ fontWeight: 700, color: 'var(--navy-700)', margin: '0 0 6px', fontFamily: FONT }}>No rankings yet</h3>
+            <p style={{ color: 'var(--navy-400)', fontSize: '0.82rem', margin: 0, fontFamily: FONT }}>
+              {isAdmin ? 'Click Add Entry to set up the first vendor ranking.' : 'Check back soon — rankings are being set up.'}
+            </p>
           </div>
         ) : (
-          <>
-            {/* ── Top 3 podium ──────────────────────────────── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+
+            {/* Top performers */}
             {top3.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.875rem', alignItems: 'stretch' }}>
-                {top3.map((e, i) => (
-                  <div key={e._id} className="lb-animate" style={{ flex: 1, minWidth: 0, animationDelay: `${i * 60}ms` }}>
-                    <PodiumCard entry={e} rank={i + 1} />
-                    {isAdmin && (
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginTop: 6 }}>
-                        <button onClick={() => handleToggleVisibility(e)}
-                          title={e.isVisible ? 'Visible' : 'Hidden'}
-                          style={{ background: 'var(--bg-card)', border: '1px solid rgba(0,0,0,0.07)', cursor: 'pointer', padding: '3px 7px', borderRadius: 7, color: e.isVisible ? '#059669' : 'var(--navy-300)', display: 'flex', alignItems: 'center', boxShadow: 'var(--shadow-xs)' }}>
-                          {e.isVisible ? <EyeIcon style={{ width: 13, height: 13 }} /> : <EyeSlashIcon style={{ width: 13, height: 13 }} />}
-                        </button>
-                        <button onClick={() => openEdit(e)}
-                          style={{ background: 'var(--bg-card)', border: '1px solid rgba(0,0,0,0.07)', cursor: 'pointer', padding: '3px 7px', borderRadius: 7, color: 'var(--accent-600)', display: 'flex', alignItems: 'center', boxShadow: 'var(--shadow-xs)' }}>
-                          <PencilIcon style={{ width: 13, height: 13 }} />
-                        </button>
-                        <button onClick={() => handleDelete(e)}
-                          style={{ background: 'var(--bg-card)', border: '1px solid rgba(0,0,0,0.07)', cursor: 'pointer', padding: '3px 7px', borderRadius: 7, color: 'var(--danger-500)', display: 'flex', alignItems: 'center', boxShadow: 'var(--shadow-xs)' }}>
-                          <TrashIcon style={{ width: 13, height: 13 }} />
-                        </button>
-                      </div>
-                    )}
+              <div className="db-card" style={{ overflow: 'hidden' }}>
+                <div style={{ padding: '0.8rem 1.4rem', borderBottom: '1px solid var(--navy-100)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <SLabel text="Top Performers" accent="#F59E0B" />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <ChevronUpIcon style={{ width: 12, height: 12, color: '#059669' }} />
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#059669', fontFamily: FONT }}>Ranked by success rate</span>
                   </div>
-                ))}
+                </div>
+                <div style={{ padding: '0.85rem 0', display: 'flex', flexDirection: 'column', gap: 0 }}>
+                  {top3.map((e, i) => (
+                    <div key={e._id} className="lb-row" style={{ padding: '0 0.85rem', animationDelay: `${i * 50}ms` }}>
+                      <FeaturedRow
+                        entry={e} rank={i + 1} isAdmin={isAdmin} portalLabels={portalLabels}
+                        onEdit={() => openEdit(e)}
+                        onDelete={() => handleDelete(e)}
+                        onToggle={() => handleToggle(e)}
+                      />
+                      {i < top3.length - 1 && <div style={{ height: 6 }} />}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
-            {/* ── Rank list (4+) ────────────────────────────── */}
+            {/* Remaining ranks */}
             {rest.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {/* column headers */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '1rem',
-                  padding: '0 1.25rem', fontSize: '0.68rem', fontWeight: 700,
-                  color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.07em',
-                }}>
-                  <div style={{ width: 36 }}>Rank</div>
-                  <div style={{ width: 38 }} />
-                  <div style={{ flex: 1 }}>Vendor</div>
-                  <div style={{ width: 120 }}>Success Rate</div>
-                  <div style={{ minWidth: 64, textAlign: 'right' }}>Labels</div>
-                  {isAdmin && <div style={{ width: 88 }} />}
+              <div className="db-card" style={{ overflow: 'hidden' }}>
+                {/* Column headers */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.6rem 1.2rem', borderBottom: '1px solid var(--navy-100)', background: 'var(--navy-50)' }}>
+                  <div style={{ width: 32, fontSize: '0.62rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>#</div>
+                  <div style={{ width: 32 }} />
+                  <div style={{ flex: 1, fontSize: '0.62rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Vendor</div>
+                  <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.08em', minWidth: 70 }}>Portal</div>
+                  <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.08em', width: 150 }}>Success Rate</div>
+                  <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--navy-400)', textTransform: 'uppercase', letterSpacing: '0.08em', minWidth: 60, textAlign: 'right' }}>Labels</div>
+                  {isAdmin && <div style={{ width: 72 }} />}
                 </div>
 
                 {rest.map((e, i) => (
-                  <div key={e._id} className="lb-animate" style={{ animationDelay: `${(i + top3.length) * 40}ms` }}>
-                    <RowCard
-                      entry={e}
-                      rank={i + 4}
-                      isAdmin={isAdmin}
+                  <div key={e._id} className="lb-row" style={{ animationDelay: `${(i + top3.length) * 35}ms` }}>
+                    <RankRow
+                      entry={e} rank={i + 4} isAdmin={isAdmin} portalLabels={portalLabels} delay={i * 35}
                       onEdit={() => openEdit(e)}
                       onDelete={() => handleDelete(e)}
-                      onToggle={() => handleToggleVisibility(e)}
+                      onToggle={() => handleToggle(e)}
                     />
                   </div>
                 ))}
               </div>
             )}
-          </>
+          </div>
         )}
 
-        {/* ── Footer note ───────────────────────────────────── */}
+        {/* ── Footer ─────────────────────────────────────────────────────────── */}
         {!isAdmin && entries.length > 0 && (
-          <p style={{ fontSize: '0.72rem', color: 'var(--navy-400)', textAlign: 'center', margin: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
-            <StarIcon style={{ width: 12, height: 12 }} />
-            Rankings are curated by the LabelFlow team based on real-world performance data.
+          <p style={{ fontSize: '0.7rem', color: 'var(--navy-400)', textAlign: 'center', margin: 0, fontFamily: FONT }}>
+            Rankings reflect real-world performance data and are curated by the platform team.
           </p>
         )}
       </div>
 
-      {/* ── Add / Edit modal ──────────────────────────────────── */}
+      {/* ── Add / Edit modal ───────────────────────────────────────────────────── */}
       {showModal && (
-        <Modal title={editEntry ? 'Edit Leaderboard Entry' : 'Add Leaderboard Entry'} onClose={() => setShowModal(false)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+        <div
+          onClick={e => e.target === e.currentTarget && setShowModal(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+        >
+          <div className="db-card" style={{ width: '100%', maxWidth: 480, padding: '1.6rem', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--navy-900)', fontFamily: FONT }}>
+                {editEntry ? 'Edit Entry' : 'Add Leaderboard Entry'}
+              </h2>
+              <button onClick={() => setShowModal(false)} style={{ background: 'var(--navy-100)', border: '1px solid var(--navy-200)', cursor: 'pointer', color: 'var(--navy-500)', padding: 5, borderRadius: 8, display: 'flex' }}>
+                <XMarkIcon style={{ width: 15, height: 15 }} />
+              </button>
+            </div>
 
-            {vendorOpts.length > 0 && (
-              <div>
-                <label className="form-label">
-                  Pick from existing vendors
-                  <span style={{ color: 'var(--navy-400)', fontWeight: 400 }}> (optional — auto-fills below)</span>
-                </label>
-                <select className="form-input form-select" value={form.vendorId}
-                  onChange={e => handleVendorPick(e.target.value)}>
-                  <option value="">— select a vendor —</option>
-                  {(['shippershub', 'labelcrow', 'shiplabel'] as const).map(p => {
-                    const group = vendorOpts.filter(v =>
-                      (v.source === 'shippershub' && p === 'shippershub') || v.source === p
-                    );
-                    if (!group.length) return null;
-                    return (
-                      <optgroup key={p} label={PORTAL_CFG[p].label}>
-                        {group.map(v => (
-                          <option key={v._id} value={v._id}>
-                            {v.name}{v.shippingService ? ` · ${v.shippingService}` : ''}
-                          </option>
-                        ))}
-                      </optgroup>
-                    );
-                  })}
-                </select>
-              </div>
-            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
 
-            <div style={{ borderTop: '1px dashed var(--navy-100)', paddingTop: '0.875rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label className="form-label">Display Name *</label>
-                  <input className="form-input" value={form.vendorName}
-                    onChange={e => setForm(f => ({ ...f, vendorName: e.target.value }))}
-                    placeholder="e.g. USPS Ground Advantage (9201)" />
-                </div>
-
+              {vendorOpts.length > 0 && (
                 <div>
-                  <label className="form-label">Portal *</label>
-                  <select className="form-input form-select" value={form.portal}
-                    onChange={e => setForm(f => ({ ...f, portal: e.target.value as Entry['portal'] }))}>
-                    <option value="shippershub">ShippersHub</option>
-                    <option value="labelcrow">Label Crow</option>
-                    <option value="shiplabel">ShipLabel</option>
+                  <label className="form-label" style={{ fontFamily: FONT }}>
+                    Pick from existing vendors
+                    <span style={{ color: 'var(--navy-400)', fontWeight: 400 }}> — optional, auto-fills below</span>
+                  </label>
+                  <select className="form-input" value={form.vendorId} onChange={e => handleVendorPick(e.target.value)} style={{ fontFamily: FONT }}>
+                    <option value="">— select a vendor —</option>
+                    {(['shippershub', 'labelcrow', 'shiplabel'] as const).map(p => {
+                      const group = vendorOpts.filter(v => (v.source === 'shippershub' && p === 'shippershub') || v.source === p);
+                      if (!group.length) return null;
+                      return (
+                        <optgroup key={p} label={PORTAL_CFG[p].label}>
+                          {group.map(v => <option key={v._id} value={v._id}>{v.name}{v.shippingService ? ` · ${v.shippingService}` : ''}</option>)}
+                        </optgroup>
+                      );
+                    })}
                   </select>
-                </div>
-
-                <div>
-                  <label className="form-label">Carrier</label>
-                  <input className="form-input" value={form.carrier}
-                    onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))}
-                    placeholder="USPS" />
-                </div>
-
-                <div>
-                  <label className="form-label">Success Rate (%) *</label>
-                  <input className="form-input" type="number" min="0" max="100" step="0.1"
-                    value={form.successRate}
-                    onChange={e => setForm(f => ({ ...f, successRate: e.target.value }))}
-                    placeholder="e.g. 94.5" />
-                </div>
-
-                <div>
-                  <label className="form-label">Total Labels</label>
-                  <input className="form-input" type="number" min="0"
-                    value={form.totalLabels}
-                    onChange={e => setForm(f => ({ ...f, totalLabels: e.target.value }))}
-                    placeholder="e.g. 12000" />
-                </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label className="form-label">Shipping Service</label>
-                  <input className="form-input" value={form.shippingService}
-                    onChange={e => setForm(f => ({ ...f, shippingService: e.target.value }))}
-                    placeholder="e.g. Ground Advantage" />
-                </div>
-              </div>
-
-              {/* Live preview bar */}
-              {form.successRate && !isNaN(parseFloat(form.successRate)) && (
-                <div style={{
-                  marginTop: '0.875rem', padding: '0.875rem 1rem',
-                  background: 'var(--navy-50)', borderRadius: 10,
-                  border: '1px solid var(--navy-100)',
-                }}>
-                  <div style={{ fontSize: '0.67rem', color: 'var(--navy-400)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-                    Preview
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ flex: 1, height: 8, background: 'var(--navy-100)', borderRadius: 99, overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: 99,
-                        width: `${Math.min(parseFloat(form.successRate), 100)}%`,
-                        background: rateBarColor(parseFloat(form.successRate)),
-                        transition: 'width 0.3s ease',
-                      }} />
-                    </div>
-                    <span style={{
-                      fontWeight: 900, fontSize: '1.1rem',
-                      color: rateColor(parseFloat(form.successRate)),
-                      minWidth: 48, textAlign: 'right',
-                    }}>
-                      {form.successRate}%
-                    </span>
-                  </div>
                 </div>
               )}
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.875rem' }}>
-                <input type="checkbox" id="isVisible" checked={form.isVisible}
-                  onChange={e => setForm(f => ({ ...f, isVisible: e.target.checked }))}
-                  style={{ width: 15, height: 15, accentColor: 'var(--accent-600)' }} />
-                <label htmlFor="isVisible" style={{ fontSize: '0.82rem', color: 'var(--navy-700)', cursor: 'pointer' }}>
-                  Visible to users
-                </label>
+              <div style={{ borderTop: '1px solid var(--navy-100)', paddingTop: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.7rem' }}>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Display Name *</label>
+                    <input className="form-input" value={form.vendorName} onChange={e => setForm(f => ({ ...f, vendorName: e.target.value }))} placeholder="e.g. USPS Ground Advantage (9201)" style={{ fontFamily: FONT }} />
+                  </div>
+
+                  <div>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Portal *</label>
+                    <select className="form-input" value={form.portal} onChange={e => setForm(f => ({ ...f, portal: e.target.value as Entry['portal'] }))} style={{ fontFamily: FONT }}>
+                      <option value="shippershub">ShippersHub</option>
+                      <option value="labelcrow">Label Crow</option>
+                      <option value="shiplabel">ShipLabel</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Carrier</label>
+                    <input className="form-input" value={form.carrier} onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))} placeholder="USPS" style={{ fontFamily: FONT }} />
+                  </div>
+
+                  <div>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Success Rate (%) *</label>
+                    <input className="form-input" type="number" min="0" max="100" step="0.1" value={form.successRate} onChange={e => setForm(f => ({ ...f, successRate: e.target.value }))} placeholder="e.g. 94.5" style={{ fontFamily: FONT }} />
+                  </div>
+
+                  <div>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Total Labels</label>
+                    <input className="form-input" type="number" min="0" value={form.totalLabels} onChange={e => setForm(f => ({ ...f, totalLabels: e.target.value }))} placeholder="e.g. 12000" style={{ fontFamily: FONT }} />
+                  </div>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label className="form-label" style={{ fontFamily: FONT }}>Shipping Service</label>
+                    <input className="form-input" value={form.shippingService} onChange={e => setForm(f => ({ ...f, shippingService: e.target.value }))} placeholder="e.g. Ground Advantage" style={{ fontFamily: FONT }} />
+                  </div>
+                </div>
+
+                {/* Live rate preview */}
+                {form.successRate && !isNaN(parseFloat(form.successRate)) && (
+                  <div style={{ marginTop: '0.85rem', padding: '0.85rem 1rem', background: 'var(--navy-50)', borderRadius: 10, border: '1px solid var(--navy-100)' }}>
+                    <div style={{ fontSize: '0.62rem', color: 'var(--navy-400)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: FONT }}>Rate Preview</div>
+                    <RateBar rate={Math.min(parseFloat(form.successRate), 100)} />
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.85rem' }}>
+                  <input type="checkbox" id="isVisible" checked={form.isVisible} onChange={e => setForm(f => ({ ...f, isVisible: e.target.checked }))} style={{ width: 14, height: 14, accentColor: 'var(--accent-600)', cursor: 'pointer' }} />
+                  <label htmlFor="isVisible" style={{ fontSize: '0.8rem', color: 'var(--navy-700)', cursor: 'pointer', fontFamily: FONT }}>Visible to users</label>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: '1.5rem' }}>
-            <button className="btn btn-ghost" onClick={() => setShowModal(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : editEntry ? 'Save Changes' : 'Add Entry'}
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7, marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--navy-100)' }}>
+              <button className="btn btn-ghost" onClick={() => setShowModal(false)} style={{ fontFamily: FONT }}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ fontFamily: FONT }}>
+                {saving ? 'Saving…' : editEntry ? 'Save Changes' : 'Add Entry'}
+              </button>
+            </div>
           </div>
-        </Modal>
+        </div>
       )}
     </>
   );

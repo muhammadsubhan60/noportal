@@ -192,9 +192,23 @@ html[data-theme='dark'] .sh-card,
 html[data-theme='dark'] .metric-card,
 html[data-theme='dark'] .modal-box,
 html[data-theme='dark'] .top-bar,
-html[data-theme='dark'] .topbar-user-chip {
+html[data-theme='dark'] .topbar-user-chip,
+html[data-theme='dark'] .db-card {
   background: var(--bg-card) !important;
   border-color: rgba(148,163,184,0.22) !important;
+}
+
+.db-card {
+  background: var(--bg-card);
+  border-radius: 16px;
+  border: 1px solid var(--navy-200);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+.db-card-hover:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+  cursor: pointer;
 }
 
 html[data-theme='dark'] .top-bar {
@@ -650,39 +664,108 @@ html[data-theme='dark'] .alert-info    { background: rgba(30, 58, 138, 0.25); co
 }
 .main-content.sidebar-collapsed { margin-left: 72px; }
 
-.top-bar {
-  background: rgba(255,255,255,0.96);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--navy-100);
-  padding: 0.75rem 1.75rem;
-  display: flex; align-items: center; justify-content: space-between;
-  position: sticky; top: var(--alert-h, 0px); z-index: 20;
-  box-shadow: 0 1px 0 var(--navy-100), var(--shadow-xs);
-}
+/* .top-bar removed — chrome lives in sidebar footer now */
 
-/* Top bar action button */
-.topbar-icon-btn {
-  width: 34px; height: 34px;
+/* ── Sidebar footer action buttons ──────────────────────────── */
+.sidebar-footer-btn {
+  width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 8px; border: 1.5px solid var(--navy-200);
-  background: none; cursor: pointer;
-  color: var(--navy-500);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  position: relative;
   transition: all var(--transition-fast);
+  padding: 0;
+  flex-shrink: 0;
 }
-.topbar-icon-btn:hover {
-  border-color: var(--accent-300);
-  color: var(--accent-500);
-  background: var(--accent-50);
+.sidebar-footer-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.88);
+  border-color: rgba(255,255,255,0.16);
+}
+.sidebar-footer-btn.logout:hover {
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(239,68,68,0.22);
+  color: #fca5a5;
 }
 
-/* Top bar user chip */
-.topbar-user-chip {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 10px; border-radius: 8px;
-  border: 1.5px solid var(--navy-100);
-  background: var(--navy-50);
-  cursor: default;
+/* Override ThemeToggle sizing when used inside sidebar footer */
+.theme-toggle-btn.sidebar-footer-btn {
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  background: rgba(255,255,255,0.04) !important;
+  color: rgba(255,255,255,0.4) !important;
+  box-shadow: none !important;
+}
+.theme-toggle-btn.sidebar-footer-btn:hover {
+  background: rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.88) !important;
+  border-color: rgba(255,255,255,0.16) !important;
+  transform: none !important;
+}
+
+/* Bell notification badge */
+.bell-badge {
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #EF4444;
+  border: 1.5px solid #0F172A;
+  pointer-events: none;
+}
+
+/* ── Mobile bottom navigation ──────────────────────────────── */
+.mobile-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 60px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--navy-100);
+  box-shadow: 0 -2px 14px rgba(0,0,0,0.08);
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: 1;
+  height: 100%;
+  text-decoration: none;
+  color: var(--navy-400);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-family: var(--font-sans);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: color var(--transition-fast);
+}
+
+.mobile-nav-item:hover { color: var(--navy-600); }
+
+.mobile-nav-item.active { color: var(--accent-500); }
+
+.mobile-nav-item.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 18%; right: 18%;
+  height: 2.5px;
+  background: var(--accent-500);
+  border-radius: 0 0 3px 3px;
 }
 
 .page-content {
@@ -754,6 +837,33 @@ html[data-theme='dark'] .alert-info    { background: rgba(30, 58, 138, 0.25); co
 }
 .vendor-rate-grid {
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.5fr);
+}
+
+/* ── New Bento Dashboard Layout ────────────────────────────────── */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 1fr 356px;
+  gap: 1rem;
+  align-items: start;
+}
+.dashboard-kpi-3col {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+.dashboard-kpi-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+@media (max-width: 1100px) {
+  .dashboard-layout { grid-template-columns: 1fr; }
+  .dashboard-kpi-3col { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+  .dashboard-kpi-3col { grid-template-columns: 1fr 1fr; }
+  .dashboard-kpi-2col { grid-template-columns: 1fr; }
 }
 
 /* ── Page Header ─────────────────────────────────────────────── */
@@ -892,13 +1002,13 @@ html[data-theme='dark'] .alert-info    { background: rgba(30, 58, 138, 0.25); co
   }
   .main-content,
   .main-content.sidebar-collapsed { margin-left: 0; }
-  .page-content { padding: 1rem; }
-  .top-bar { padding: 0.75rem 1rem; }
-  .topbar-user-chip { display: none; }
+  .page-content { padding: 1rem; padding-bottom: calc(1rem + 68px); }
+  .mobile-bottom-nav { display: flex; }
   .dashboard-two-col-grid { grid-template-columns: 1fr; }
   .vendor-rate-grid { grid-template-columns: 1fr; }
   /* Force all links visible on mobile */
   .sidebar-link.icon-only { justify-content: flex-start; padding: 0.48rem 0.9rem; margin: 1px 8px; }
+  .sidebar-link.icon-only.active { padding-left: calc(0.9rem - 2.5px); }
   .nav-label { display: block !important; }
   .nav-active-dot { display: block !important; }
 }

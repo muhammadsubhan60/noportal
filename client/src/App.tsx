@@ -8,6 +8,8 @@ import Layout from './components/Layout';
 import VendorLayout from './components/VendorLayout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import LandingProxy from './pages/LandingProxy';
 import BlogIndex from './pages/BlogIndex';
 import BlogPost from './pages/BlogPost';
@@ -38,9 +40,19 @@ import Finance             from './pages/Finance';
 import CashBook            from './pages/CashBook';
 import FinancialDashboard  from './pages/FinancialDashboard';
 import Settings            from './pages/Settings';
-import TopupHistory        from './pages/TopupHistory';
-import PaymentHistory      from './pages/PaymentHistory';
 import Leaderboard         from './pages/Leaderboard';
+import Suggestions         from './pages/Suggestions';
+import ResellerUserStats   from './pages/ResellerUserStats';
+import ResellerBulkAccess  from './pages/ResellerBulkAccess';
+import AdminErrorLogs      from './pages/AdminErrorLogs';
+import BulkVendorAccess    from './pages/BulkVendorAccess';
+import CCLayout             from './pages/CommandCenter/CCLayout';
+import CCDashboard          from './pages/CommandCenter/CCDashboard';
+import CCLabels             from './pages/CommandCenter/CCLabels';
+import CCBulkLabels         from './pages/CommandCenter/CCBulkLabels';
+import CCBulkTrackingUpdate from './pages/CommandCenter/CCBulkTrackingUpdate';
+import CCVendorPerformance  from './pages/CommandCenter/CCVendorPerformance';
+import CCUsers              from './pages/CommandCenter/CCUsers';
 import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
 
@@ -50,6 +62,9 @@ const AdminOnly = ({ children }: { children: React.ReactNode }) => (
 );
 const AdminOrReseller = ({ children }: { children: React.ReactNode }) => (
   <ProtectedRoute roles={['admin', 'reseller']}>{children}</ProtectedRoute>
+);
+const CCAllowed = ({ children }: { children: React.ReactNode }) => (
+  <ProtectedRoute roles={['admin']} allowCC>{children}</ProtectedRoute>
 );
 
 function App() {
@@ -64,6 +79,8 @@ function App() {
                 {/* Public routes */}
                 <Route path="/login"  element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password"  element={<ResetPassword />} />
 
                 {/* ── Vendor Portal (completely separate, neutral branding) ── */}
                 <Route path="/vendor-portal/login" element={<VendorLogin />} />
@@ -78,6 +95,16 @@ function App() {
                 <Route path="/" element={<LandingProxy />} />
                 <Route path="/blog" element={<BlogIndex />} />
                 <Route path="/blog/:slug" element={<BlogPost />} />
+
+                {/* ── Command Center (admin, or reseller with ccAccess — own layout) ── */}
+                <Route path="/command-center" element={<CCAllowed><CCLayout /></CCAllowed>}>
+                  <Route index element={<Navigate to="/command-center/dashboard" replace />} />
+                  <Route path="dashboard"   element={<CCDashboard />} />
+                  <Route path="labels"      element={<CCLabels />} />
+                  <Route path="bulk-labels" element={<CCBulkLabels />} />
+                  <Route path="ai-status"   element={<CCBulkTrackingUpdate />} />
+                  <Route path="vendor-perf" element={<CCVendorPerformance />} />
+                </Route>
 
                 {/* ── Main portal (Label Flow users) ─────────────────────── */}
                 <Route element={
@@ -97,14 +124,17 @@ function App() {
                   <Route path="/manifest/history"    element={<ManifestHistory />} />
                   <Route path="/activity"            element={<LiveActivity />} />
                   <Route path="/leaderboard"         element={<Leaderboard />} />
-                  <Route path="/topups"              element={<TopupHistory />} />
-                  <Route path="/payments"            element={<PaymentHistory />} />
+                  <Route path="/suggestions"         element={<Suggestions />} />
+                  {/* Topup/payment history now lives inline on the Profile page */}
+                  <Route path="/topups"              element={<Navigate to="/profile" replace />} />
+                  <Route path="/payments"            element={<Navigate to="/profile" replace />} />
 
                   {/* Admin-only routes */}
                   <Route path="/admin"                         element={<AdminOnly><AdminDashboard /></AdminOnly>} />
                   <Route path="/admin/users"                   element={<AdminOnly><UserManagement /></AdminOnly>} />
                   <Route path="/admin/users/:userId/access"    element={<AdminOnly><UserVendorAccess /></AdminOnly>} />
                   <Route path="/admin/vendors"                 element={<AdminOnly><VendorManagement /></AdminOnly>} />
+                  <Route path="/admin/bulk-vendor-access"      element={<AdminOnly><BulkVendorAccess /></AdminOnly>} />
                   <Route path="/admin/manifest"                element={<AdminOnly><AdminManifestOps /></AdminOnly>} />
                   <Route path="/admin/finance"                 element={<AdminOnly><Finance /></AdminOnly>} />
                   <Route path="/admin/cashbook"                element={<AdminOnly><CashBook /></AdminOnly>} />
@@ -114,10 +144,14 @@ function App() {
                   <Route path="/admin/warehouses"              element={<AdminOnly><AdminWarehouses /></AdminOnly>} />
                   <Route path="/admin/states"                  element={<AdminOnly><AdminStates /></AdminOnly>} />
                   <Route path="/admin/bulk-tracking-update"   element={<AdminOnly><BulkTrackingUpdate /></AdminOnly>} />
+                  <Route path="/admin/user-stats"              element={<AdminOnly><CCUsers /></AdminOnly>} />
+                  <Route path="/admin/logs"                    element={<AdminOnly><AdminErrorLogs /></AdminOnly>} />
 
                   {/* Reseller routes (admin can also access) */}
-                  <Route path="/reseller/clients" element={<AdminOrReseller><ResellerClients /></AdminOrReseller>} />
-                  <Route path="/reseller/finance" element={<AdminOrReseller><Finance /></AdminOrReseller>} />
+                  <Route path="/reseller/clients"     element={<AdminOrReseller><ResellerClients /></AdminOrReseller>} />
+                  <Route path="/reseller/finance"     element={<AdminOrReseller><Finance /></AdminOrReseller>} />
+                  <Route path="/reseller/user-stats"  element={<AdminOrReseller><ResellerUserStats /></AdminOrReseller>} />
+                  <Route path="/reseller/bulk-access" element={<AdminOrReseller><ResellerBulkAccess /></AdminOrReseller>} />
                 </Route>
 
                 {/* Catch all → root domain */}

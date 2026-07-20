@@ -261,6 +261,12 @@ const Login: React.FC = () => {
               </div>
             </div>
 
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4 }}>
+              <Link to="/forgot-password" style={{ fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, textDecoration: 'none' }}>
+                Forgot password?
+              </Link>
+            </div>
+
             {error && (
               <div style={{
                 display: 'flex', alignItems: 'flex-start', gap: 10,

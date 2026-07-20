@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import * as XLSX from 'xlsx';
 import uspsLogo  from '../Logos/United_States_Postal_Service-Logo.wine.png';
 import upsLogo   from '../Logos/United_Parcel_Service-Logo.wine.png';
 import fedexLogo from '../Logos/FedEx_Express-Logo.wine.png';
@@ -9,18 +10,13 @@ import {
   TruckIcon, ArrowDownTrayIcon, ArrowUpTrayIcon, CheckCircleIcon,
   ExclamationCircleIcon, DocumentTextIcon, XMarkIcon, ClockIcon,
   ClipboardDocumentListIcon, PlusIcon, TrashIcon,
-  ArrowLeftIcon, SparklesIcon, BoltIcon,
+  ArrowLeftIcon, SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { getUspsZone1Rate } from '../utils/uspsRates';
-
-// ── External state analytics API ─────────────────────────────────────────────
-const EXT     = 'https://shippers-hub-tracking-command-cente.vercel.app/api/public';
-const EXT_HDR = { 'x-api-key': 'sh-public-2024-gama' };
-
-// Sentinel value for "Auto — Best per State" vendor option
-const AUTO_VENDOR_ID = '__auto__';
+import { lookupZip } from '../utils/zipLookup';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+interface SlSeriesOption { series: string; format: string; name: string; }
 interface AccessItem {
   vendorId:        string;
   vendorName:      string;
@@ -31,6 +27,7 @@ interface AccessItem {
   isAllowed:       boolean;
   rateTiers:       { minLbs: number; maxLbs: number | null; rate: number }[];
   portal:          'shippershub' | 'labelcrow' | 'shiplabel';
+  shiplabelSeries?: SlSeriesOption[];
 }
 
 interface LcAsyncJob {
@@ -111,31 +108,6 @@ interface ManifestResult {
   newBalance:    number;
 }
 
-interface VendorAnalyticsRow {
-  vendor:       string;
-  total:        number;
-  deliveryRate: number;
-}
-
-interface MultiResultRow {
-  originalIndex: number;
-  labelId:       string | null;
-  vendorName:    string;
-  trackingId:    string;
-  success:       boolean;
-  error?:        string;
-  pdfUrl:        string | null;
-}
-
-interface MultiApiResult {
-  type:        'multi-api';
-  groups:      { vendorName: string; bulkJobId: string; submitted: number; succeeded: number }[];
-  combined:    MultiResultRow[];
-  totalSuccess: number;
-  totalFailed:  number;
-  newBalance:   number;
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 const REQUIRED_COLS = [
   'from_name','from_address1','from_city','from_state','from_zip',
@@ -177,11 +149,17 @@ const CARRIER_LOGOS: Record<string, string> = {
   USPS: uspsLogo, UPS: upsLogo, FedEx: fedexLogo, DHL: dhlLogo,
 };
 
+const FONT = "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif";
+
 const PORTALS = [
-  { id: 'shippershub' as const, label: 'ShippersHub', accentColor: '#1D4ED8', selectedBg: '#EFF6FF', selectedBorder: '#1D4ED8' },
-  { id: 'labelcrow'   as const, label: 'Label Crow',  accentColor: '#7C3AED', selectedBg: '#F5F3FF', selectedBorder: '#7C3AED' },
-  { id: 'shiplabel'   as const, label: 'ShipLabel',   accentColor: '#059669', selectedBg: '#ECFDF5', selectedBorder: '#059669' },
+  { id: 'shippershub' as const, accentColor: '#1D4ED8', selectedBg: '#EFF6FF', selectedBorder: '#1D4ED8' },
+  { id: 'labelcrow'   as const, accentColor: '#7C3AED', selectedBg: '#F5F3FF', selectedBorder: '#7C3AED' },
+  { id: 'shiplabel'   as const, accentColor: '#059669', selectedBg: '#ECFDF5', selectedBorder: '#059669' },
 ];
+
+// Placeholder shown only until /access/me resolves — never the raw portal brand,
+// since a reseller's client should never see it flash before their white-label name loads.
+const DEFAULT_PORTAL_LABELS: Record<string, string> = { shippershub: 'Standard', labelcrow: 'Express', shiplabel: 'Priority' };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const CarrierLogo = ({ name }: { name: string }) => {
@@ -217,6 +195,146 @@ function downloadTemplate(carrier: string) {
   URL.revokeObjectURL(url);
 }
 
+// ── Label Crow XLSX format ────────────────────────────────────────────────────
+
+// ── Label Crow XLSX column map ────────────────────────────────────────────────
+const LC_XLSX_COL_MAP: Record<string, string> = {
+  fromName:    'from_name',
+  fromStreet:  'from_address1',
+  fromStreet2: 'from_address2',
+  fromCity:    'from_city',
+  fromState:   'from_state',
+  fromZip:     'from_zip',
+  fromPhone:   'from_phone',
+  toName:      'to_name',
+  toStreet:    'to_address1',
+  toStreet2:   'to_address2',
+  toCity:      'to_city',
+  toState:     'to_state',
+  toZip:       'to_zip',
+  toPhone:     'to_phone',
+  weight:      'weight',
+  length:      'length',
+  width:       'width',
+  height:      'height',
+  orderNum:    'note',
+};
+const LC_XLSX_HEADERS = Object.keys(LC_XLSX_COL_MAP);
+
+// ── ShipLabel XLSX column map ─────────────────────────────────────────────────
+const SL_XLSX_COL_MAP: Record<string, string> = {
+  No:             '__skip__',   // row number — ignored
+  FromName:       'from_name',
+  PhoneFrom:      'from_phone',
+  Street1From:    'from_address1',
+  CompanyFrom:    'from_company',
+  Street2From:    'from_address2',
+  CityFrom:       'from_city',
+  StateFrom:      'from_state',
+  PostalCodeFrom: 'from_zip',
+  PostalCode:     'from_zip',   // some SL template versions omit "From" suffix
+  ZipFrom:        'from_zip',
+  Zip:            'from_zip',
+  ToName:         'to_name',
+  PhoneTo:        'to_phone',
+  Street1To:      'to_address1',
+  CompanyTo:      'to_company',
+  Street2To:      'to_address2',
+  CityTo:         'to_city',
+  ZipTo:          'to_zip',
+  PostalCodeTo:   'to_zip',
+  StateTo:        'to_state',
+  Weight:         'weight',
+  length:         'length',
+  width:          'width',
+  height:         'height',
+  description:    'note',
+};
+const SL_XLSX_HEADERS = Object.keys(SL_XLSX_COL_MAP).filter(h => h !== 'No');
+
+// ── Shared: convert an Excel cell value to a clean string ─────────────────────
+// Handles scientific-notation phone numbers (e.g. 1.48E+10 → "14800000000")
+function xlsxCellToStr(val: any): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'number') {
+    // Round to avoid floating-point noise, then stringify
+    return String(Math.round(val));
+  }
+  return String(val).trim();
+}
+
+// ── Shared XLSX parser ────────────────────────────────────────────────────────
+function parseXLSXWithMap(
+  buffer: ArrayBuffer,
+  colMap: Record<string, string>,
+): { headers: string[]; rows: LabelRow[]; rawHeaders: string[] } {
+  const wb   = XLSX.read(buffer, { type: 'array' });
+  const ws   = wb.Sheets[wb.SheetNames[0]];
+  const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (data.length < 2) return { headers: [], rows: [], rawHeaders: [] };
+
+  // Normalized fallback: lowercase + no-spaces so "Postal Code" still matches "PostalCode"
+  const normMap: Record<string, string> = {};
+  for (const [k, v] of Object.entries(colMap)) {
+    normMap[k.toLowerCase().replace(/\s+/g, '')] = v;
+  }
+  const resolveCol = (h: string): string => {
+    if (colMap[h] !== undefined) return colMap[h];
+    const norm = h.toLowerCase().replace(/\s+/g, '');
+    if (normMap[norm] !== undefined) return normMap[norm];
+    return h.toLowerCase().replace(/\s+/g, '_');
+  };
+
+  const rawHeaders: string[] = data[0].map((h: any) => String(h).trim());
+  const internalHeaders = rawHeaders
+    .map(h => resolveCol(h))
+    .filter(h => h !== '__skip__');
+
+  const rows = data.slice(1)
+    .filter(r => r.some((c: any) => xlsxCellToStr(c)))
+    .map(r => {
+      const obj: LabelRow = {};
+      rawHeaders.forEach((h, i) => {
+        const key = resolveCol(h);
+        if (key === '__skip__') return;
+        obj[key] = xlsxCellToStr(r[i]);
+      });
+      return obj;
+    });
+
+  return { headers: internalHeaders, rows, rawHeaders };
+}
+
+function downloadLcXlsxTemplate() {
+  const sampleRow = [
+    'John Doe', '123 Main St', 'Suite 100', 'New York', 'NY', '10001', '555-123-4567',
+    'Jane Smith', '456 Oak Ave', '', 'Los Angeles', 'CA', '90001', '555-987-6543',
+    '5', '12', '10', '8', 'ORD-001',
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([LC_XLSX_HEADERS, sampleRow]);
+  ws['!cols'] = LC_XLSX_HEADERS.map(() => ({ wch: 16 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Labels');
+  XLSX.writeFile(wb, 'labelcrow_bulk_template.xlsx');
+}
+
+function downloadSlXlsxTemplate() {
+  const headers   = ['No', ...SL_XLSX_HEADERS];
+  const sampleRow = [
+    '1', 'John Doe', '5551234567', '123 Main St', 'Acme Corp', 'Suite 100',
+    'New York', 'NY', '10001',
+    'Jane Smith', '5559876543', '456 Oak Ave', '', '',
+    'Los Angeles', '90001', 'CA',
+    '5', '12', '10', '8', 'Sample shipment',
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
+  ws['!cols'] = headers.map((h, i) => ({ wch: i === 0 ? 5 : 16 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Labels');
+  XLSX.writeFile(wb, 'shiplabel_bulk_template.xlsx');
+}
+
+// ── CSV format ────────────────────────────────────────────────────────────────
 function parseCSV(text: string): { headers: string[]; rows: LabelRow[] } {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return { headers: [], rows: [] };
@@ -247,6 +365,23 @@ function validateRow(row: LabelRow): string[] {
     if (!row[col]?.trim()) errs.push(`${col.replace(/_/g,' ')} required`);
   }
   if (row.weight && isNaN(parseFloat(row.weight))) errs.push('weight must be a number');
+
+  for (const side of ['from', 'to'] as const) {
+    const zip   = (row[`${side}_zip`] ?? '').trim();
+    const state = (row[`${side}_state`] ?? '').trim().toUpperCase();
+    const city  = (row[`${side}_city`] ?? '').trim();
+    if (!/^\d{5}$/.test(zip)) continue;
+    const hit = lookupZip(zip);
+    const label = side === 'from' ? 'From' : 'To';
+    if (!hit) { errs.push(`${label} ZIP ${zip} is not a valid US zip code`); continue; }
+    if (state && hit.state !== state) {
+      errs.push(`${label} ZIP ${zip} → state should be ${hit.state} (got ${state})`);
+    }
+    if (city && hit.city.toLowerCase() !== city.toLowerCase()) {
+      errs.push(`${label} ZIP ${zip} → city suggestion: "${hit.city}" (entered: "${city}")`);
+    }
+  }
+
   return errs;
 }
 
@@ -254,12 +389,6 @@ function emptyRow(): LabelRow {
   const row: LabelRow = {};
   ALL_COLS.forEach(c => { row[c] = ''; });
   return row;
-}
-
-/** Extract tracking prefix code from analytics vendor name e.g. "usps pitney priority (9401)" → "9401" */
-function extractServiceCode(vendorName: string): string {
-  const m = vendorName.match(/\((\w+)\)\s*$/);
-  return m ? m[1] : '';
 }
 
 /** Calculate effective rate for an AccessItem given a weight */
@@ -271,51 +400,17 @@ function getVendorEffectiveRate(vendor: AccessItem, weight: number): number {
   return tier?.rate ?? vendor.baseRate;
 }
 
-/**
- * Find the best accessible vendor for a state.
- * Tries analytics vendors sorted by deliveryRate desc, matches by shippingService code.
- * Only considers api-type (non-manifest) vendors.
- */
-function assignBestVendor(
-  stateVendors: VendorAnalyticsRow[],
-  allowedVendors: AccessItem[],
-): AccessItem | null {
-  const sorted = [...stateVendors].sort((a, b) => b.deliveryRate - a.deliveryRate);
-  for (const sv of sorted) {
-    const analyticsCode = extractServiceCode(sv.vendor);
-    if (!analyticsCode) continue;
-    // Match by the code embedded in the vendor's own name, not shippingService
-    // (shippingService stores generic labels like "ground"/"priority", not numeric codes)
-    const match = allowedVendors.find(av => {
-      const vendorCode = extractServiceCode(av.vendorName);
-      return vendorCode === analyticsCode && av.isAllowed;
-    });
-    if (match) {
-      console.log(`[assignBest] code "${analyticsCode}" → matched "${match.vendorName}" (rate ${sv.deliveryRate}%)`);
-      return match;
-    }
-  }
-  console.log(`[assignBest] no match for any analytics vendor. allowedVendors codes: ${allowedVendors.map(av => extractServiceCode(av.vendorName) || '(none)').join(', ')}`);
-  return null;
-}
-
-function parseAnalyticsData(raw: any): VendorAnalyticsRow[] {
-  if (Array.isArray(raw)) return raw;
-  for (const k of ['data', 'vendors', 'breakdown']) {
-    if (raw[k] && Array.isArray(raw[k])) return raw[k];
-  }
-  return [];
-}
-
 // ── Component ──────────────────────────────────────────────────────────────────
 const BulkLabelGenerator: React.FC = () => {
   const navigate = useNavigate();
 
   // ── Existing state ──────────────────────────────────────────────────────────
   const [accessList,     setAccessList]     = useState<AccessItem[]>([]);
+  const [portalLabels,   setPortalLabels]   = useState<Record<string, string>>(DEFAULT_PORTAL_LABELS);
   const [selectedCarrier,setSelectedCarrier]= useState('');
   const [selectedVendor, setSelectedVendor] = useState<AccessItem | null>(null);
   const [fileName,       setFileName]       = useState('');
+  const [nickName,       setNickName]       = useState('');
   const [rows,           setRows]           = useState<LabelRow[]>([]);
   const [rowErrors,      setRowErrors]      = useState<Record<number, string[]>>({});
   const [headerMissing,  setHeaderMissing]  = useState<string[]>([]);
@@ -325,31 +420,31 @@ const BulkLabelGenerator: React.FC = () => {
   const [genError,       setGenError]       = useState('');
   const [isDragging,     setIsDragging]     = useState(false);
 
-  // ── Auto-vendor state ───────────────────────────────────────────────────────
-  const [isAutoMode,     setIsAutoMode]     = useState(false);
-  const [rowAssignments, setRowAssignments] = useState<(AccessItem | null)[]>([]);
-  const [autoLoading,    setAutoLoading]    = useState(false);
-  const [multiApiResult, setMultiApiResult] = useState<MultiApiResult | null>(null);
-  const [downloadingZip, setDownloadingZip] = useState(false);
-
   // ── Portal state ────────────────────────────────────────────
-  const [selectedPortal, setSelectedPortal] = useState<'shippershub' | 'labelcrow' | 'shiplabel' | ''>('');
+  const [selectedPortal,  setSelectedPortal]  = useState<'shippershub' | 'labelcrow' | 'shiplabel' | ''>('');
+  const [selectedSeries,  setSelectedSeries]  = useState('');
 
   // ── Label Crow async state ───────────────────────────────────
   const [lcAsyncJob,    setLcAsyncJob]    = useState<LcAsyncJob | null>(null);
   const [lcJobProgress, setLcJobProgress] = useState<LcJobProgress | null>(null);
 
   // ── ShipLabel async state ────────────────────────────────────
-  const [slAsyncJob,    setSlAsyncJob]    = useState<SlAsyncJob | null>(null);
-  const [slJobProgress, setSlJobProgress] = useState<SlJobProgress | null>(null);
+  const [slAsyncJob,       setSlAsyncJob]       = useState<SlAsyncJob | null>(null);
+  const [slJobProgress,    setSlJobProgress]    = useState<SlJobProgress | null>(null);
 
   const fileRef              = useRef<HTMLInputElement>(null);
-  const isAutoModeRef        = useRef(false);
-  const stateVendorCacheRef  = useRef<Record<string, VendorAnalyticsRow[]>>({});
   const lcPollRef            = useRef<ReturnType<typeof setInterval> | null>(null);
   const slPollRef            = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  isAutoModeRef.current = isAutoMode;
+  const lcLog = useCallback((msg: string, level: 'info' | 'warn' | 'error' = 'info') => {
+    const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    fn(`[LC-DEBUG] ${msg}`);
+  }, []);
+
+  const slLog = useCallback((msg: string, level: 'info' | 'warn' | 'error' = 'info') => {
+    const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    fn(`[SL-DEBUG] ${msg}`);
+  }, []);
 
   useEffect(() => {
     axios.get('/access/me')
@@ -358,6 +453,7 @@ const BulkLabelGenerator: React.FC = () => {
         console.log('[BulkAuto] accessList loaded:', list.length, 'items');
         console.log('[BulkAuto] USPS vendors:', list.filter((a: AccessItem) => a.carrier === 'USPS'));
         setAccessList(list);
+        if (r.data.portalLabels) setPortalLabels(r.data.portalLabels);
       })
       .catch(e => console.error('[BulkAuto] /access/me failed:', e));
   }, []);
@@ -368,43 +464,19 @@ const BulkLabelGenerator: React.FC = () => {
     (a.portal || 'shippershub') === selectedPortal
   );
 
-  const allowedUspsVendors = useMemo(() => {
-    const filtered = accessList.filter(a =>
-      a.carrier === 'USPS' && a.isAllowed && (a.portal || 'shippershub') === 'shippershub'
-    );
-    console.log('[BulkAuto] allowedUspsVendors recalculated:', filtered.length, filtered.map(v => `${v.vendorName}(${v.shippingService})`));
-    return filtered;
-  }, [accessList]);
-
   const getEffectiveRate = useCallback((weight: number) => {
     if (!selectedVendor) return 0;
     return getVendorEffectiveRate(selectedVendor, weight);
   }, [selectedVendor]);
 
-  // Unified per-row rate (works in both normal and auto mode)
-  const getRowRate = useCallback((rowIdx: number, weight: number): number => {
-    if (isAutoMode) {
-      const v = rowAssignments[rowIdx];
-      return v ? getVendorEffectiveRate(v, weight) : 0;
-    }
+  const getRowRate = useCallback((_rowIdx: number, weight: number): number => {
     return getEffectiveRate(weight);
-  }, [isAutoMode, rowAssignments, getEffectiveRate]);
+  }, [getEffectiveRate]);
 
-  // Merge row validation errors + auto-vendor errors
-  const allRowErrors = useMemo(() => {
-    const combined: Record<number, string[]> = { ...rowErrors };
-    if (isAutoMode && rowAssignments.length === rows.length) {
-      rows.forEach((row, i) => {
-        if (!rowAssignments[i]) {
-          combined[i] = [...(combined[i] || []), `No vendor for state ${row.to_state || '?'} — ask admin to enable access`];
-        }
-      });
-    }
-    return combined;
-  }, [rowErrors, isAutoMode, rowAssignments, rows]);
+  const allRowErrors = rowErrors;
 
   const totalCost = rows.reduce((sum, r, i) => sum + getRowRate(i, parseFloat(r.weight) || 0), 0);
-  const hasErrors  = Object.keys(allRowErrors).length > 0 || headerMissing.length > 0 || autoLoading;
+  const hasErrors  = Object.keys(allRowErrors).length > 0 || headerMissing.length > 0;
   const carrier    = CARRIERS.find(c => c.name === selectedCarrier);
 
   const hasRateTiers  = !!selectedVendor?.rateTiers?.length;
@@ -412,7 +484,7 @@ const BulkLabelGenerator: React.FC = () => {
 
   // Savings vs retail — only in single-vendor USPS API mode
   const totalSavings = useMemo(() => {
-    if (selectedCarrier !== 'USPS' || isAutoMode || selectedVendor?.vendorType === 'manifest') return 0;
+    if (selectedCarrier !== 'USPS' || selectedVendor?.vendorType === 'manifest') return 0;
     return rows.reduce((sum, r) => {
       const w = parseFloat(r.weight) || 0;
       if (w <= 0) return sum;
@@ -421,7 +493,7 @@ const BulkLabelGenerator: React.FC = () => {
       const saving = retail - getEffectiveRate(w);
       return sum + (saving > 0 ? saving : 0);
     }, 0);
-  }, [rows, selectedCarrier, isAutoMode, selectedVendor, getEffectiveRate]);
+  }, [rows, selectedCarrier, selectedVendor, getEffectiveRate]);
 
   // ── Row editing ──────────────────────────────────────────────────────────────
   const revalidateRows = useCallback((newRows: LabelRow[]) => {
@@ -444,101 +516,89 @@ const BulkLabelGenerator: React.FC = () => {
     const newRows = rows.filter((_, i) => i !== rowIdx);
     setRows(newRows);
     revalidateRows(newRows);
-    if (isAutoMode) {
-      setRowAssignments(prev => prev.filter((_, i) => i !== rowIdx));
-    }
   };
 
   const addRow = () => {
     const newRows = [...rows, emptyRow()];
     setRows(newRows);
     revalidateRows(newRows);
-    if (isAutoMode) setRowAssignments(prev => [...prev, null]);
-  };
-
-  // ── Auto-vendor assignment ────────────────────────────────────────────────────
-  const autoAssignVendors = useCallback(async (parsedRows: LabelRow[]) => {
-    setAutoLoading(true);
-    setRowAssignments([]);
-    console.log('[BulkAuto] autoAssignVendors START — rows:', parsedRows.length, '| allowedUspsVendors:', allowedUspsVendors.length);
-    try {
-      const uniqueStates = Array.from(new Set(
-        parsedRows.map(r => r.to_state?.trim().toUpperCase()).filter(Boolean)
-      )) as string[];
-      console.log('[BulkAuto] unique to_states in file:', uniqueStates);
-
-      const statesToFetch = uniqueStates.filter(s => !stateVendorCacheRef.current[s]);
-      console.log('[BulkAuto] states to fetch from API:', statesToFetch);
-
-      if (statesToFetch.length > 0) {
-        const fetched = await Promise.all(
-          statesToFetch.map(async state => {
-            try {
-              const res = await axios.get(`${EXT}/state-vendor-breakdown?state=${state}`, { headers: EXT_HDR });
-              const vendors = parseAnalyticsData(res.data);
-              console.log(`[BulkAuto] ${state} → ${vendors.length} analytics vendors`, vendors.map((v: VendorAnalyticsRow) => `${v.vendor}(${v.deliveryRate}%)`));
-              return [state, vendors] as [string, VendorAnalyticsRow[]];
-            } catch (e) {
-              console.error(`[BulkAuto] fetch failed for state ${state}:`, e);
-              return [state, []] as [string, VendorAnalyticsRow[]];
-            }
-          })
-        );
-        fetched.forEach(([state, vendors]) => { stateVendorCacheRef.current[state] = vendors; });
-      }
-
-      const assignments: (AccessItem | null)[] = parsedRows.map((row, i) => {
-        const state = row.to_state?.trim().toUpperCase();
-        if (!state) { console.warn(`[BulkAuto] row ${i} has no to_state`); return null; }
-        const stateVendors = stateVendorCacheRef.current[state] || [];
-        const match = assignBestVendor(stateVendors, allowedUspsVendors);
-        console.log(`[BulkAuto] row ${i} state=${state} → assigned: ${match ? match.vendorName + '(' + match.shippingService + ')' : 'NULL — no match'}`);
-        return match;
-      });
-
-      console.log('[BulkAuto] final assignments:', assignments.map(a => a?.vendorName ?? 'null'));
-      setRowAssignments(assignments);
-    } catch (e) {
-      console.error('[BulkAuto] assignment error', e);
-    } finally {
-      setAutoLoading(false);
-    }
-  }, [allowedUspsVendors]);
-
-  const overrideRowVendor = (rowIdx: number, vendorId: string) => {
-    const v = allowedUspsVendors.find(x => x.vendorId === vendorId) || null;
-    setRowAssignments(prev => {
-      const next = [...prev];
-      next[rowIdx] = v;
-      return next;
-    });
   };
 
   // ── File processing ──────────────────────────────────────────────────────────
   const clearFile = () => {
     setFileName(''); setRows([]); setRowErrors({}); setHeaderMissing([]);
-    setRowAssignments([]);
   };
 
   const processFile = (file: File) => {
-    if (!file.name.endsWith('.csv')) { setHeaderMissing(['Please upload a .csv file']); return; }
+    const isXlsx = /\.(xlsx|xls)$/i.test(file.name);
+    const isCsv  = /\.csv$/i.test(file.name);
+
+    const xlsxPortal = selectedPortal === 'labelcrow' || selectedPortal === 'shiplabel';
+    if (xlsxPortal) {
+      if (!isXlsx && !isCsv) { setHeaderMissing(['Please upload a .xlsx or .csv file']); return; }
+    } else {
+      if (!isCsv) { setHeaderMissing(['Please upload a .csv file']); return; }
+    }
+
     setFileName(file.name);
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const { headers, rows: parsedRows } = parseCSV(text);
+
+    const handleParsed = (headers: string[], parsedRows: LabelRow[], src: string, rawHdrs?: string[]) => {
       const missing = REQUIRED_COLS.filter(c => !headers.includes(c));
+      if (selectedPortal === 'labelcrow') {
+        console.group('[LC] File parsed');
+        console.log('Source:', src, '| rows:', parsedRows.length);
+        console.log('Headers (internal):', headers);
+        if (missing.length) console.warn('Missing required cols:', missing);
+        if (parsedRows[0]) console.log('Row 0 sample:', parsedRows[0]);
+        console.groupEnd();
+        lcLog(`File parsed — ${parsedRows.length} rows | format: ${src}${missing.length ? ` | MISSING: ${missing.join(', ')}` : ' | all required cols present'}`);
+      } else if (selectedPortal === 'shiplabel') {
+        console.group('[SL] File parsed');
+        console.log('Source:', src, '| rows:', parsedRows.length);
+        if (rawHdrs) console.log('Raw XLSX headers:', rawHdrs);
+        console.log('Mapped internal headers:', headers);
+        if (missing.length) console.warn('MISSING required cols:', missing);
+        if (parsedRows[0]) console.log('Row 0 sample:', parsedRows[0]);
+        console.groupEnd();
+        slLog(`File: ${src} | ${parsedRows.length} rows`);
+        if (rawHdrs) slLog(`Raw headers (${rawHdrs.length}): ${rawHdrs.join(' · ')}`);
+        slLog(`Mapped headers (${headers.length}): ${headers.join(' · ')}`);
+        if (missing.length) {
+          slLog(`MISSING required cols: ${missing.join(', ')}`, 'error');
+        } else {
+          slLog('All required columns present ✓');
+        }
+        if (parsedRows[0]) slLog(`Row 0: ${JSON.stringify(parsedRows[0])}`);
+      }
       setHeaderMissing(missing);
       if (missing.length === 0) {
         setRows(parsedRows);
         revalidateRows(parsedRows);
-        if (isAutoModeRef.current) autoAssignVendors(parsedRows);
       } else {
         setRows([]);
-        setRowAssignments([]);
       }
     };
-    reader.readAsText(file);
+
+    if (isXlsx && selectedPortal === 'labelcrow') {
+      reader.onload = (e) => {
+        const { headers, rows: parsedRows, rawHeaders } = parseXLSXWithMap(e.target?.result as ArrayBuffer, LC_XLSX_COL_MAP);
+        handleParsed(headers, parsedRows, 'XLSX (LC camelCase)', rawHeaders);
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (isXlsx && selectedPortal === 'shiplabel') {
+      reader.onload = (e) => {
+        const { headers, rows: parsedRows, rawHeaders } = parseXLSXWithMap(e.target?.result as ArrayBuffer, SL_XLSX_COL_MAP);
+        handleParsed(headers, parsedRows, 'XLSX (SL format)', rawHeaders);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = (e) => {
+        const { headers, rows: parsedRows } = parseCSV(e.target?.result as string);
+        handleParsed(headers, parsedRows, 'CSV');
+      };
+      reader.readAsText(file);
+    }
   };
 
   const handleFileDrop  = (e: React.DragEvent) => {
@@ -556,103 +616,73 @@ const BulkLabelGenerator: React.FC = () => {
   const handleGenerateNormal = async () => {
     if (!selectedVendor || hasErrors || rows.length === 0) return;
     setIsGenerating(true); setGenError('');
+
+    const isLC = selectedPortal === 'labelcrow';
+    if (isLC) {
+      console.group('[LC] ── Bulk Submit ──');
+      console.log('Vendor:', selectedVendor.vendorName, '| id:', selectedVendor.vendorId);
+      console.log('Portal:', selectedPortal, '| carrier:', selectedVendor.carrier, '| service:', selectedVendor.shippingService);
+      console.log('Label count:', rows.length);
+      console.log('Row #1 (internal):', rows[0]);
+      console.groupEnd();
+      lcLog(`Submitting ${rows.length} labels → vendor: "${selectedVendor.vendorName}" (${selectedVendor.vendorId}) | ${selectedVendor.carrier} ${selectedVendor.shippingService}`);
+    }
+
     try {
-      const res = await axios.post('/labels/bulk', { vendorId: selectedVendor.vendorId, labels: rows });
+      const res = await axios.post('/labels/bulk', { vendorId: selectedVendor.vendorId, labels: rows, bulkFileName: nickName.trim() || fileName, ...(selectedSeries ? { shiplabel_series: selectedSeries } : {}) });
+
+      if (isLC) {
+        console.group('[LC] Submit response');
+        console.log('HTTP status:', res.status);
+        console.log('Response type:', res.data.type);
+        console.log('Full response:', res.data);
+        console.groupEnd();
+        lcLog(`Response ${res.status} — type: ${res.data.type}`);
+      }
+
       if (res.data.type === 'manifest') {
         setManifestResult(res.data as ManifestResult);
       } else if (res.data.type === 'labelcrow-async') {
+        if (isLC) lcLog(`Job accepted — LC jobId: ${res.data.lcJobId} | orderId: ${res.data.lcOrderId} | total: ${res.data.total}`);
         setLcAsyncJob(res.data as LcAsyncJob);
         startLcPoll(res.data.lcJobId);
       } else if (res.data.type === 'shiplabel-async') {
+        slLog(`Job accepted — bulkJobId: ${res.data.bulkJobId} | total: ${res.data.total}`);
         setSlAsyncJob(res.data as SlAsyncJob);
         startSlPoll(res.data.bulkJobId);
       } else {
         setApiResult(res.data as ApiResult);
       }
     } catch (err: any) {
-      const data = err.response?.data;
+      const data    = err.response?.data;
+      const status  = err.response?.status;
+      const errCode = data?.error?.code || data?.code || '';
+      const errMsg  = data?.error?.message || data?.message || err.message || 'Failed to generate labels';
+
+      if (isLC) {
+        console.group('[LC] Submit ERROR');
+        console.error('HTTP status:', status);
+        console.error('Error code:', errCode || '(none)');
+        console.error('Error message:', errMsg);
+        console.error('Full response data:', data);
+        console.error('Raw error:', err);
+        console.groupEnd();
+        lcLog(`ERROR ${status} ${errCode ? `[${errCode}]` : ''}: ${errMsg}`, 'error');
+        if (data?.error) lcLog(`API error detail: ${JSON.stringify(data.error)}`, 'error');
+      }
+      if (selectedPortal === 'shiplabel') {
+        slLog(`Submit ERROR ${status || ''}: ${errMsg}`, 'error');
+        if (data?.message) slLog(`Server: ${data.message}`, 'error');
+      }
+
       if (data?.errors?.length) setGenError(data.errors.map((e: any) => e.msg).join(' · '));
-      else setGenError(data?.message || 'Failed to generate labels');
+      else setGenError(errCode ? `[${errCode}] ${errMsg}` : errMsg);
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // ── Generate — auto multi-vendor ─────────────────────────────────────────────
-  const handleGenerateAuto = async () => {
-    setIsGenerating(true); setGenError('');
-
-    // Group rows by assigned vendorId, preserving original indices
-    const groups = new Map<string, { vendor: AccessItem; rows: LabelRow[]; origIdx: number[] }>();
-    rows.forEach((row, i) => {
-      const v = rowAssignments[i];
-      if (!v) return;
-      const g = groups.get(v.vendorId);
-      if (g) { g.rows.push(row); g.origIdx.push(i); }
-      else groups.set(v.vendorId, { vendor: v, rows: [row], origIdx: [i] });
-    });
-
-    // Pre-fill combined with placeholder failures
-    const combined: MultiResultRow[] = rows.map((_, i) => ({
-      originalIndex: i,
-      labelId:      null,
-      vendorName:   rowAssignments[i]?.vendorName || '—',
-      trackingId:   '',
-      success:      false,
-      error:        rowAssignments[i] ? 'Pending' : 'No vendor assigned',
-      pdfUrl:       null,
-    }));
-
-    let newBalance = 0;
-    const groupSummaries: MultiApiResult['groups'] = [];
-
-    for (const group of Array.from(groups.values())) {
-      try {
-        const res = await axios.post('/labels/bulk', { vendorId: group.vendor.vendorId, labels: group.rows });
-        newBalance = res.data.newBalance ?? newBalance;
-
-        if (res.data.type === 'manifest') {
-          group.origIdx.forEach((idx: number) => {
-            combined[idx] = { ...combined[idx], success: true, error: undefined, vendorName: group.vendor.vendorName };
-          });
-          groupSummaries.push({ vendorName: group.vendor.vendorName, bulkJobId: res.data.manifestJobId, submitted: group.rows.length, succeeded: group.rows.length });
-        } else {
-          const results: RowResult[] = res.data.results || [];
-          let succeeded = 0;
-          group.origIdx.forEach((origIdx: number, j: number) => {
-            const r = results[j] || { success: false, error: 'No response' };
-            if (r.success) succeeded++;
-            combined[origIdx] = {
-              originalIndex: origIdx,
-              labelId:       r.labelId  || null,
-              vendorName:    group.vendor.vendorName,
-              trackingId:    r.trackingId || '',
-              success:       r.success,
-              error:         r.error,
-              pdfUrl:        r.pdfUrl   || null,
-            };
-          });
-          groupSummaries.push({ vendorName: group.vendor.vendorName, bulkJobId: res.data.bulkJobId || '', submitted: group.rows.length, succeeded });
-        }
-      } catch (err: any) {
-        const msg = err.response?.data?.message || 'Failed';
-        group.origIdx.forEach((idx: number) => { combined[idx] = { ...combined[idx], success: false, error: msg }; });
-        groupSummaries.push({ vendorName: group.vendor.vendorName, bulkJobId: '', submitted: group.rows.length, succeeded: 0 });
-      }
-    }
-
-    setMultiApiResult({
-      type:         'multi-api',
-      groups:       groupSummaries,
-      combined,
-      totalSuccess: combined.filter(r => r.success).length,
-      totalFailed:  combined.filter(r => !r.success).length,
-      newBalance,
-    });
-    setIsGenerating(false);
-  };
-
-  const handleGenerate = () => isAutoMode ? handleGenerateAuto() : handleGenerateNormal();
+  const handleGenerate = () => handleGenerateNormal();
 
   // ── Available portals (only show portals where user has ≥1 allowed vendor) ──
   const availablePortals = useMemo(() =>
@@ -662,64 +692,32 @@ const BulkLabelGenerator: React.FC = () => {
   // Stop polling on unmount
   useEffect(() => () => { stopLcPoll(); stopSlPoll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Must be before early returns (Rules of Hooks) ────────────────────────────
-  const autoVendorGroups = useMemo(() => {
-    if (!isAutoMode || rowAssignments.length === 0) return [];
-    const map = new Map<string, { name: string; count: number }>();
-    rowAssignments.forEach(v => {
-      if (!v) return;
-      const existing = map.get(v.vendorId);
-      if (existing) existing.count++;
-      else map.set(v.vendorId, { name: v.vendorName, count: 1 });
-    });
-    return Array.from(map.values());
-  }, [isAutoMode, rowAssignments]);
-
-  // ── Combined ZIP download (auto mode) ────────────────────────────────────────
-  const downloadCombinedZip = async () => {
-    if (!multiApiResult) return;
-    setDownloadingZip(true);
-    try {
-      // Each vendor group has its own pre-built ZIP — download them sequentially.
-      // The existing /zip/bulk/:id endpoint serves the pre-built ZIP directly.
-      const groups = multiApiResult.groups.filter(g => g.bulkJobId && g.succeeded > 0);
-      if (groups.length === 0) { alert('No labels were generated — nothing to download.'); return; }
-
-      for (const group of groups) {
-        const res = await axios.get(`/labels/zip/bulk/${group.bulkJobId}`, { responseType: 'blob' });
-        const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/zip' }));
-        const safeName = group.vendorName.replace(/[^a-zA-Z0-9()]/g, '-').replace(/-+/g, '-');
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `labels-${safeName}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        // Brief pause so the browser doesn't block simultaneous downloads
-        await new Promise(resolve => setTimeout(resolve, 400));
-      }
-    } catch (e: any) {
-      console.error('[downloadCombinedZip] error:', e);
-      alert('Failed to download ZIP. Please try again.');
-    } finally {
-      setDownloadingZip(false);
-    }
-  };
-
   const stopLcPoll = () => {
     if (lcPollRef.current) { clearInterval(lcPollRef.current); lcPollRef.current = null; }
   };
 
   const startLcPoll = (jobId: string) => {
     stopLcPoll();
+    let tick = 0;
+    lcLog(`Poll started for job ${jobId} — interval: 2500ms`);
     lcPollRef.current = setInterval(async () => {
+      tick++;
       try {
         const res = await axios.get(`/labels/labelcrow-job/${jobId}`);
-        setLcJobProgress(res.data);
-        if (res.data.status === 'completed' || res.data.status === 'failed') stopLcPoll();
-      } catch (e) {
-        console.error('[LcPoll]', e);
+        const d   = res.data;
+        console.log(`[LC Poll #${tick}]`, { status: d.status, generated: d.generated, failed: d.failed, total: d.total, progress: d.progress });
+        lcLog(`Poll #${tick} — status: ${d.status} | ${d.generated ?? '?'}/${d.total ?? '?'} done | ${d.failed ?? 0} failed | ${d.progress ?? 0}%`);
+        setLcJobProgress(d);
+        if (d.status === 'completed' || d.status === 'failed') {
+          lcLog(`Job ${d.status.toUpperCase()} after ${tick} polls — generated: ${d.generated}, failed: ${d.failed}`, d.status === 'failed' ? 'error' : 'info');
+          if (d.zipUrl) lcLog(`ZIP available at: ${d.zipUrl}`);
+          stopLcPoll();
+        }
+      } catch (e: any) {
+        const status = e.response?.status;
+        const msg    = e.response?.data?.message || e.message || 'unknown';
+        console.error(`[LC Poll #${tick}] ERROR`, e);
+        lcLog(`Poll #${tick} ERROR — HTTP ${status ?? 'n/a'}: ${msg}`, 'error');
       }
     }, 2500);
   };
@@ -730,12 +728,19 @@ const BulkLabelGenerator: React.FC = () => {
 
   const startSlPoll = (bulkJobId: string) => {
     stopSlPoll();
+    let tick = 0;
+    slLog(`Poll started — jobId: ${bulkJobId}`);
     slPollRef.current = setInterval(async () => {
+      tick++;
       try {
         const res = await axios.get(`/labels/shiplabel-job/${bulkJobId}`);
+        const { total, generated, failed, pending, done } = res.data;
+        slLog(`Tick ${tick}: ${generated}/${total} generated · ${failed} failed · ${pending} pending${done ? ' · DONE' : ''}`);
+        if (failed > 0 && tick <= 3) slLog(`Some labels failed — check server logs for details`, 'warn');
         setSlJobProgress(res.data);
-        if (res.data.done) stopSlPoll();
-      } catch (e) {
+        if (done) { stopSlPoll(); slLog(`Job complete — ${generated} generated, ${failed} failed`, failed > 0 ? 'warn' : 'info'); }
+      } catch (e: any) {
+        slLog(`Poll tick ${tick} ERROR: ${e?.message || e}`, 'error');
         console.error('[SlPoll]', e);
       }
     }, 2000);
@@ -743,12 +748,13 @@ const BulkLabelGenerator: React.FC = () => {
 
   const reset = () => {
     stopLcPoll(); stopSlPoll();
-    setSelectedPortal(''); setSelectedCarrier(''); setSelectedVendor(null); setIsAutoMode(false);
+    setSelectedPortal(''); setSelectedCarrier(''); setSelectedVendor(null); setSelectedSeries('');
     setFileName(''); setRows([]); setRowErrors({}); setHeaderMissing([]);
-    setApiResult(null); setManifestResult(null); setMultiApiResult(null);
+    setNickName('');
+    setApiResult(null); setManifestResult(null);
     setLcAsyncJob(null); setLcJobProgress(null);
     setSlAsyncJob(null); setSlJobProgress(null);
-    setGenError(''); setRowAssignments([]);
+    setGenError('');
   };
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -876,10 +882,10 @@ const BulkLabelGenerator: React.FC = () => {
         {apiResult.zipUrl && (
           <button className="btn btn-primary" onClick={async () => {
             try {
-              const res = await axios.get(apiResult.zipUrl!, { responseType: 'blob' });
+              const res = await axios.get(apiResult.zipUrl!.replace(/^\//, ''), { responseType: 'blob' });
               const url = window.URL.createObjectURL(new Blob([res.data]));
               const a = document.createElement('a');
-              a.href = url; a.download = 'bulk-labels.zip';
+              a.href = url; a.download = (nickName.trim() || fileName).replace(/\.[^.]+$/, '') + '.zip';
               document.body.appendChild(a); a.click(); a.remove();
               window.URL.revokeObjectURL(url);
             } catch { alert('Failed to download ZIP.'); }
@@ -887,108 +893,6 @@ const BulkLabelGenerator: React.FC = () => {
             <ArrowDownTrayIcon style={{ width: 16, height: 16 }} /> Download All Labels (ZIP)
           </button>
         )}
-        <button className="btn btn-ghost" onClick={() => navigate('/labels/history')}>View History</button>
-      </div>
-    </div>
-  );
-
-  // ══════════════════════════════════════════════════════════════════════════════
-  // RESULT — Multi-vendor auto mode
-  // ══════════════════════════════════════════════════════════════════════════════
-  if (multiApiResult) return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} className="animate-fadeIn">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button onClick={reset} className="btn btn-ghost btn-sm" style={{ padding: '0.375rem' }}>
-          <ArrowLeftIcon style={{ width: 18, height: 18 }} />
-        </button>
-        <div className="page-header" style={{ margin: 0 }}>
-          <h1 className="page-title">Auto-Vendor Bulk Complete</h1>
-          <p className="page-subtitle">
-            {multiApiResult.totalSuccess} generated · {multiApiResult.totalFailed} failed · {multiApiResult.groups.length} vendor group{multiApiResult.groups.length !== 1 ? 's' : ''}
-          </p>
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: '1rem' }}>
-        {[
-          { val: multiApiResult.totalSuccess,            label: 'Generated', color: 'var(--success-600)' },
-          { val: multiApiResult.totalFailed,             label: 'Failed',    color: multiApiResult.totalFailed > 0 ? 'var(--danger-600)' : 'var(--navy-500)' },
-          { val: multiApiResult.groups.length,           label: 'Vendors',   color: '#7C3AED' },
-          { val: `$${multiApiResult.newBalance.toFixed(2)}`, label: 'Balance', color: 'var(--accent-600)' },
-        ].map(({ val, label, color }) => (
-          <div key={label} className="sh-card" style={{ padding: '1.25rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '1.8rem', fontWeight: 800, color }}>{val}</div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--navy-500)', marginTop: 4 }}>{label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Group breakdown */}
-      <div className="sh-card">
-        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--navy-500)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
-          Vendor Groups
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {multiApiResult.groups.map((g, i) => (
-            <div key={i} style={{ padding: '6px 14px', borderRadius: 99, background: '#EFF6FF', border: '1.5px solid #BFDBFE', fontSize: '0.78rem', fontWeight: 700, color: '#1D4ED8', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>{g.vendorName}</span>
-              <span style={{ background: '#DBEAFE', padding: '1px 7px', borderRadius: 99, fontSize: '0.7rem' }}>{g.succeeded}/{g.submitted}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Unified result table */}
-      <div className="sh-card">
-        <div style={{ overflowX: 'auto' }}>
-          <table className="sh-table">
-            <thead>
-              <tr><th>#</th><th>To Name</th><th>Vendor</th><th>Tracking ID</th><th>Status</th><th></th></tr>
-            </thead>
-            <tbody>
-              {multiApiResult.combined.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ color: 'var(--navy-500)', fontSize: '0.8rem' }}>{r.originalIndex + 1}</td>
-                  <td style={{ fontWeight: 500 }}>{rows[r.originalIndex]?.to_name || '—'}</td>
-                  <td><span style={{ fontSize: '0.72rem', color: '#1D4ED8', fontWeight: 700, background: '#EFF6FF', padding: '2px 8px', borderRadius: 99 }}>{r.vendorName}</span></td>
-                  <td><span style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{r.trackingId || '—'}</span></td>
-                  <td>
-                    {r.success
-                      ? <span className="badge badge-green"><CheckCircleIcon style={{ width: 11, height: 11 }} />Generated</span>
-                      : <span className="badge badge-red"><ExclamationCircleIcon style={{ width: 11, height: 11 }} />{r.error || 'Failed'}</span>}
-                  </td>
-                  <td>
-                    {r.pdfUrl && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => window.open(r.pdfUrl!, '_blank')}>
-                        <ArrowDownTrayIcon style={{ width: 13, height: 13 }} /> PDF
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <button className="btn btn-ghost" onClick={reset}>Generate Another Batch</button>
-        {multiApiResult.totalSuccess > 0 && (() => {
-          const dlGroups = multiApiResult.groups.filter(g => g.bulkJobId && g.succeeded > 0);
-          return (
-            <button
-              className="btn btn-primary"
-              disabled={downloadingZip}
-              onClick={downloadCombinedZip}
-            >
-              {downloadingZip
-                ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />Downloading…</>
-                : <><ArrowDownTrayIcon style={{ width: 16, height: 16 }} />
-                    Download Labels ({dlGroups.length} ZIP{dlGroups.length !== 1 ? 's' : ''})</>}
-            </button>
-          );
-        })()}
         <button className="btn btn-ghost" onClick={() => navigate('/labels/history')}>View History</button>
       </div>
     </div>
@@ -1004,7 +908,7 @@ const BulkLabelGenerator: React.FC = () => {
       <div className="animate-fadeIn" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div className="page-header" style={{ margin: 0 }}>
           <h1 className="page-title">Generating Labels…</h1>
-          <p className="page-subtitle">Label Crow is processing your batch. This usually takes 10–60 seconds.</p>
+          <p className="page-subtitle">{portalLabels.labelcrow || DEFAULT_PORTAL_LABELS.labelcrow} is processing your batch. This usually takes 10–60 seconds.</p>
         </div>
         <div className="sh-card" style={{ padding: '2rem', textAlign: 'center' }}>
           <div style={{ marginBottom: 20 }}>
@@ -1033,7 +937,9 @@ const BulkLabelGenerator: React.FC = () => {
   // RESULT — Label Crow complete / failed
   // ══════════════════════════════════════════════════════════════════════════════
   if (lcAsyncJob && lcJobProgress && (lcJobProgress.status === 'completed' || lcJobProgress.status === 'failed')) {
-    const prog = lcJobProgress;
+    const prog       = lcJobProgress;
+    const allFailed  = prog.failed > 0 && prog.failed >= prog.total;
+    const isRealFail = prog.status === 'failed' || allFailed;
     return (
       <div className="animate-fadeIn" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1042,14 +948,33 @@ const BulkLabelGenerator: React.FC = () => {
           </button>
           <div className="page-header" style={{ margin: 0 }}>
             <h1 className="page-title">
-              {prog.status === 'completed' ? 'Label Crow Bulk Complete' : 'Label Crow Bulk Failed'}
+              {isRealFail ? `${portalLabels.labelcrow || DEFAULT_PORTAL_LABELS.labelcrow} Bulk Failed` : `${portalLabels.labelcrow || DEFAULT_PORTAL_LABELS.labelcrow} Bulk Complete`}
             </h1>
             <p className="page-subtitle">{prog.generated} generated · {prog.failed} failed</p>
           </div>
         </div>
+
+        {/* All-failed diagnostic banner */}
+        {allFailed && (
+          <div style={{ background: '#FFF5F5', border: '1.5px solid #FECACA', borderRadius: 10, padding: '1rem 1.25rem', display: 'flex', gap: 12 }}>
+            <ExclamationCircleIcon style={{ width: 20, height: 20, color: '#DC2626', flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <div style={{ fontWeight: 700, color: '#DC2626', fontSize: '0.875rem', marginBottom: 4 }}>
+                All {prog.total} labels failed PDF generation — tracking numbers were created but no PDFs produced
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#7F1D1D', lineHeight: 1.6 }}>
+                Tracking numbers were created but labels could not be produced. Any credits charged for this batch will be automatically refunded.
+              </div>
+              <div style={{ marginTop: 8, fontSize: '0.78rem', color: '#991B1B' }}>
+                Please try a different vendor, or contact support if the issue continues.
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: '1rem' }}>
           {[
-            { val: prog.generated, label: 'Generated', color: 'var(--success-600)' },
+            { val: prog.generated, label: 'Generated', color: isRealFail ? 'var(--navy-500)' : 'var(--success-600)' },
             { val: prog.failed,    label: 'Failed',    color: prog.failed > 0 ? 'var(--danger-600)' : 'var(--navy-500)' },
             { val: `$${(prog.newBalance ?? 0).toFixed(2)}`, label: 'Balance', color: 'var(--accent-600)' },
           ].map(({ val, label, color }) => (
@@ -1061,13 +986,13 @@ const BulkLabelGenerator: React.FC = () => {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button className="btn btn-ghost" onClick={reset}>Generate Another Batch</button>
-          {prog.status === 'completed' && prog.zipUrl && (
+          {!isRealFail && prog.zipUrl && (
             <button className="btn btn-primary" onClick={async () => {
               try {
-                const r = await axios.get(prog.zipUrl!, { responseType: 'blob' });
+                const r = await axios.get(prog.zipUrl!.replace(/^\//, ''), { responseType: 'blob' });
                 const url = window.URL.createObjectURL(new Blob([r.data]));
                 const a = document.createElement('a');
-                a.href = url; a.download = 'labelcrow-labels.zip';
+                a.href = url; a.download = (nickName.trim() || fileName).replace(/\.[^.]+$/, '') + '.zip';
                 document.body.appendChild(a); a.click(); a.remove();
                 window.URL.revokeObjectURL(url);
               } catch { alert('Download failed. Please try again.'); }
@@ -1091,7 +1016,7 @@ const BulkLabelGenerator: React.FC = () => {
       <div className="animate-fadeIn" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div className="page-header" style={{ margin: 0 }}>
           <h1 className="page-title">Generating Labels…</h1>
-          <p className="page-subtitle">ShipLabel is processing your batch — updating live.</p>
+          <p className="page-subtitle">{portalLabels.shiplabel || DEFAULT_PORTAL_LABELS.shiplabel} is processing your batch — updating live.</p>
         </div>
         <div className="sh-card" style={{ padding: '2rem', textAlign: 'center' }}>
           <div style={{ marginBottom: 20 }}>
@@ -1146,7 +1071,7 @@ const BulkLabelGenerator: React.FC = () => {
       <div className="animate-fadeIn" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <div className="page-header" style={{ margin: 0 }}>
           <h1 className="page-title">Generating Labels…</h1>
-          <p className="page-subtitle">ShipLabel is processing your batch — updating live.</p>
+          <p className="page-subtitle">{portalLabels.shiplabel || DEFAULT_PORTAL_LABELS.shiplabel} is processing your batch — updating live.</p>
         </div>
         <div className="sh-card" style={{ padding: '2rem', textAlign: 'center' }}>
           <div className="spinner" style={{ width: 40, height: 40, borderWidth: 4, borderColor: '#059669', margin: '0 auto 16px' }} />
@@ -1168,7 +1093,7 @@ const BulkLabelGenerator: React.FC = () => {
             <ArrowLeftIcon style={{ width: 18, height: 18 }} />
           </button>
           <div className="page-header" style={{ margin: 0 }}>
-            <h1 className="page-title">ShipLabel Bulk Complete</h1>
+            <h1 className="page-title">{portalLabels.shiplabel || DEFAULT_PORTAL_LABELS.shiplabel} Bulk Complete</h1>
             <p className="page-subtitle">{generated} generated · {failed} failed</p>
           </div>
         </div>
@@ -1217,6 +1142,25 @@ const BulkLabelGenerator: React.FC = () => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {generated > 0 && (
+            <button
+              className="btn btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              onClick={async () => {
+                try {
+                  const r = await axios.get(`labels/zip/bulk/${slAsyncJob.bulkJobId}`, { responseType: 'blob' });
+                  const blobUrl = window.URL.createObjectURL(new Blob([r.data], { type: 'application/zip' }));
+                  const a = document.createElement('a');
+                  a.href = blobUrl; a.download = 'shiplabel-labels.zip';
+                  document.body.appendChild(a); a.click(); a.remove();
+                  window.URL.revokeObjectURL(blobUrl);
+                } catch { alert('Download failed. Please try again.'); }
+              }}
+            >
+              <ArrowDownTrayIcon style={{ width: 15, height: 15 }} />
+              Download ZIP ({generated} label{generated !== 1 ? 's' : ''})
+            </button>
+          )}
           <button className="btn btn-ghost" onClick={reset}>Generate Another Batch</button>
           <button className="btn btn-ghost" onClick={() => navigate('/labels/history')}>View History</button>
         </div>
@@ -1227,13 +1171,54 @@ const BulkLabelGenerator: React.FC = () => {
   // ══════════════════════════════════════════════════════════════════════════════
   // MAIN VIEW
   // ══════════════════════════════════════════════════════════════════════════════
-  const uploadEnabled = !!(selectedVendor || isAutoMode);
+  const currentStep = !selectedPortal ? 1 : !selectedCarrier ? 2 : !selectedVendor ? 3 : !fileName ? 4 : 5;
+  const uploadEnabled = !!selectedVendor;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', paddingBottom: rows.length > 0 && uploadEnabled ? 80 : 0 }} className="animate-fadeIn">
 
+      {/* ── Step wizard ──────────────────────────────────────── */}
+      <div className="db-card" style={{ padding: '0.9rem 1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          {([
+            { n: 1, label: 'Portal'   },
+            { n: 2, label: 'Carrier'  },
+            { n: 3, label: 'Vendor'   },
+            { n: 4, label: 'Upload'   },
+            { n: 5, label: 'Generate' },
+          ] as const).map((s, i) => {
+            const done = currentStep > s.n;
+            const act  = currentStep === s.n;
+            return (
+              <React.Fragment key={s.n}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: '50%',
+                    background: done ? '#10B981' : act ? '#6366F1' : 'var(--navy-100)',
+                    border: `2px solid ${done ? '#10B981' : act ? '#6366F1' : 'var(--navy-200)'}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.25s ease',
+                    boxShadow: act ? '0 0 0 4px rgba(99,102,241,0.12)' : 'none',
+                  }}>
+                    {done
+                      ? <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      : <span style={{ fontSize: '0.65rem', fontWeight: 800, color: act ? '#fff' : 'var(--navy-400)', lineHeight: 1, fontFamily: FONT }}>{s.n}</span>}
+                  </div>
+                  <span style={{ fontSize: '0.58rem', fontWeight: done || act ? 700 : 500, color: done ? '#059669' : act ? '#6366F1' : 'var(--navy-400)', whiteSpace: 'nowrap', fontFamily: FONT, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                    {s.label}
+                  </span>
+                </div>
+                {i < 4 && (
+                  <div style={{ flex: 1, height: 2, background: done ? '#10B981' : 'var(--navy-150, #E2E8F0)', margin: '0 8px', marginBottom: 18, transition: 'background 0.35s ease', borderRadius: 99 }} />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+
       {/* ── Combined service card ─────────────────────────────── */}
-      <div className="sh-card" style={{ overflow: 'hidden' }}>
+      <div className="db-card" style={{ overflow: 'hidden' }}>
 
         {/* Row 0 — Portal pills */}
         {availablePortals.length > 0 && (
@@ -1245,20 +1230,20 @@ const BulkLabelGenerator: React.FC = () => {
                 <div
                   key={p.id}
                   onClick={() => {
-                    if (isSel) { setSelectedPortal(''); setSelectedCarrier(''); setSelectedVendor(null); setIsAutoMode(false); clearFile(); return; }
-                    setSelectedPortal(p.id); setSelectedCarrier(''); setSelectedVendor(null); setIsAutoMode(false); clearFile();
+                    if (isSel) { setSelectedPortal(''); setSelectedCarrier(''); setSelectedVendor(null); setSelectedSeries(''); clearFile(); return; }
+                    setSelectedPortal(p.id); setSelectedCarrier(''); setSelectedVendor(null); setSelectedSeries(''); clearFile();
                   }}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     height: 34, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
                     border: isSel ? `2px solid ${p.accentColor}` : '1.5px solid #e2e8f0',
-                    background: isSel ? p.selectedBg : '#fff',
+                    background: isSel ? p.selectedBg : 'var(--bg-card)',
                     boxShadow: isSel ? `0 0 0 3px ${p.accentColor}18` : 'none',
                     transition: 'all 0.15s',
                   }}
                 >
                   <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isSel ? p.accentColor : 'var(--navy-600)' }}>
-                    {p.label}
+                    {portalLabels[p.id] || DEFAULT_PORTAL_LABELS[p.id]}
                   </span>
                 </div>
               );
@@ -1280,15 +1265,15 @@ const BulkLabelGenerator: React.FC = () => {
                   key={c.name}
                   onClick={() => {
                     if (!isEnabled) return;
-                    if (isSelected) { setSelectedCarrier(''); setSelectedVendor(null); setIsAutoMode(false); clearFile(); return; }
-                    setSelectedCarrier(c.name); setSelectedVendor(null); setIsAutoMode(false); clearFile();
+                    if (isSelected) { setSelectedCarrier(''); setSelectedVendor(null); setSelectedSeries(''); clearFile(); return; }
+                    setSelectedCarrier(c.name); setSelectedVendor(null); setSelectedSeries(''); clearFile();
                   }}
                   title={isEnabled ? `${c.name} · ${allowed.length} vendor${allowed.length !== 1 ? 's' : ''}` : 'No access'}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     height: 46, minWidth: 80, padding: '4px 12px', borderRadius: 10,
                     border: isSelected ? `2px solid ${c.accentColor}` : '1.5px solid #e2e8f0',
-                    background: isSelected ? c.selectedBg : '#fff',
+                    background: isSelected ? c.selectedBg : 'var(--bg-card)',
                     cursor: isEnabled ? 'pointer' : 'not-allowed',
                     opacity: isEnabled ? 1 : 0.35,
                     boxShadow: isSelected ? `0 0 0 3px ${c.accentColor}18, 0 2px 8px ${c.accentColor}20` : 'none',
@@ -1307,47 +1292,43 @@ const BulkLabelGenerator: React.FC = () => {
           <div style={{ flex: 1, minWidth: 200, maxWidth: 360 }}>
             <select
               className="form-input form-select"
-              value={isAutoMode ? AUTO_VENDOR_ID : (selectedVendor?.vendorId || '')}
+              value={selectedVendor?.vendorId || ''}
               disabled={!selectedPortal || !selectedCarrier}
               onChange={e => {
-                const val = e.target.value;
-                if (val === AUTO_VENDOR_ID) {
-                  setSelectedVendor(null);
-                  setIsAutoMode(true);
-                  clearFile();
-                } else {
-                  const v = vendorsForCarrier.find(x => x.vendorId === val) || null;
-                  setSelectedVendor(v);
-                  setIsAutoMode(false);
-                  clearFile();
-                }
+                const v = vendorsForCarrier.find(x => x.vendorId === e.target.value) || null;
+                setSelectedVendor(v);
+                setSelectedSeries('');
+                clearFile();
               }}
               style={{ padding: '0.45rem 2rem 0.45rem 0.75rem', fontSize: '0.82rem', cursor: selectedCarrier ? 'pointer' : 'not-allowed' }}
             >
               <option value="">
                 {!selectedPortal ? '← pick a portal first' : !selectedCarrier ? '← pick a carrier' : '— select vendor —'}
               </option>
-              {/* Auto option — ShippersHub USPS only */}
-              {selectedCarrier === 'USPS' && selectedPortal === 'shippershub' && (
-                <option value={AUTO_VENDOR_ID}>⚡ Auto — Best per State</option>
-              )}
               {vendorsForCarrier.map(v => (
                 <option key={v.vendorId} value={v.vendorId}>
                   {v.vendorName}{v.shippingService ? ` · ${v.shippingService}` : ''}
                 </option>
               ))}
             </select>
+            {selectedVendor?.shiplabelSeries && selectedVendor.shiplabelSeries.length > 0 && (
+              <select
+                value={selectedSeries}
+                onChange={e => setSelectedSeries(e.target.value)}
+                style={{ padding: '0.45rem 2rem 0.45rem 0.75rem', fontSize: '0.82rem', cursor: 'pointer', border: `1.5px solid ${selectedSeries ? '#059669' : '#f59e0b'}`, borderRadius: 8, background: '#fff', outline: 'none' }}
+              >
+                <option value="">— select series —</option>
+                {selectedVendor.shiplabelSeries.map(opt => (
+                  <option key={opt.series} value={opt.series}>
+                    {opt.name ? `${opt.name} (${opt.series})` : opt.series}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
-          {/* Vendor / auto badges */}
-          {isAutoMode && (
-            <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'linear-gradient(90deg,#EFF6FF,#F5F3FF)', border: '1.5px solid #BFDBFE', padding: '3px 10px', borderRadius: 99, fontSize: '0.75rem', fontWeight: 700, color: '#4338CA' }}>
-                <BoltIcon style={{ width: 11, height: 11 }} /> Auto — Best per State
-              </span>
-            </div>
-          )}
-          {!isAutoMode && selectedVendor && (
+          {/* Vendor badges */}
+          {selectedVendor && (
             <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0 }}>
               {selectedVendor.shippingService && <span className="badge badge-blue">{selectedVendor.shippingService}</span>}
               {selectedVendor.vendorType === 'manifest'
@@ -1359,8 +1340,17 @@ const BulkLabelGenerator: React.FC = () => {
           <div style={{ flex: 1 }} />
 
           {selectedCarrier && (
-            <button className="btn btn-ghost btn-sm" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', flexShrink: 0 }} onClick={() => downloadTemplate(selectedCarrier)}>
-              <ArrowDownTrayIcon style={{ width: 13, height: 13 }} /> Template
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', flexShrink: 0 }}
+              onClick={() =>
+                selectedPortal === 'labelcrow' ? downloadLcXlsxTemplate()
+                : selectedPortal === 'shiplabel' ? downloadSlXlsxTemplate()
+                : downloadTemplate(selectedCarrier)
+              }
+            >
+              <ArrowDownTrayIcon style={{ width: 13, height: 13 }} />
+              {selectedPortal === 'labelcrow' || selectedPortal === 'shiplabel' ? 'Template (.xlsx)' : 'Template (.csv)'}
             </button>
           )}
         </div>
@@ -1372,15 +1362,10 @@ const BulkLabelGenerator: React.FC = () => {
               <DocumentTextIcon style={{ width: 15, height: 15, color: 'var(--accent-500)', flexShrink: 0 }} />
               <span style={{ fontWeight: 600, color: 'var(--navy-800)', fontSize: '0.82rem' }}>{fileName}</span>
               <span style={{ fontSize: '0.78rem', color: 'var(--navy-500)' }}>{rows.length} rows</span>
-              {autoLoading && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', color: '#7C3AED' }}>
-                  <div className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /> Assigning vendors…
-                </span>
-              )}
-              {!autoLoading && headerMissing.length === 0 && Object.keys(allRowErrors).length === 0 && rows.length > 0 && (
+              {headerMissing.length === 0 && Object.keys(allRowErrors).length === 0 && rows.length > 0 && (
                 <span className="badge badge-green"><CheckCircleIcon style={{ width: 10, height: 10 }} />Valid</span>
               )}
-              {!autoLoading && (headerMissing.length > 0 || Object.keys(allRowErrors).length > 0) && (
+              {(headerMissing.length > 0 || Object.keys(allRowErrors).length > 0) && (
                 <span className="badge badge-red"><ExclamationCircleIcon style={{ width: 10, height: 10 }} />
                   {headerMissing.length > 0 ? 'Bad columns' : `${Object.keys(allRowErrors).length} row error${Object.keys(allRowErrors).length !== 1 ? 's' : ''}`}
                 </span>
@@ -1388,7 +1373,14 @@ const BulkLabelGenerator: React.FC = () => {
               {headerMissing.length > 0 && (
                 <span style={{ fontSize: '0.75rem', color: 'var(--danger-600)' }}>
                   Missing: {headerMissing.join(', ')} —{' '}
-                  <button style={{ background: 'none', border: 'none', color: 'var(--accent-600)', textDecoration: 'underline', cursor: 'pointer', padding: 0, fontSize: 'inherit' }} onClick={() => downloadTemplate(selectedCarrier)}>
+                  <button
+                    style={{ background: 'none', border: 'none', color: 'var(--accent-600)', textDecoration: 'underline', cursor: 'pointer', padding: 0, fontSize: 'inherit' }}
+                    onClick={() =>
+                      selectedPortal === 'labelcrow' ? downloadLcXlsxTemplate()
+                      : selectedPortal === 'shiplabel' ? downloadSlXlsxTemplate()
+                      : downloadTemplate(selectedCarrier)
+                    }
+                  >
                     get template
                   </button>
                 </span>
@@ -1418,36 +1410,56 @@ const BulkLabelGenerator: React.FC = () => {
                 {!uploadEnabled
                   ? !selectedPortal ? 'Select a portal above to get started'
                     : !selectedCarrier ? 'Select a carrier above'
+                    : selectedPortal === 'labelcrow' ? 'Select a vendor above to upload XLSX'
                     : 'Select a vendor above to upload CSV'
                   : isDragging ? 'Drop it!'
-                  : isAutoMode ? 'Drop CSV here — vendor will be auto-assigned per state'
+                  : (selectedPortal === 'labelcrow' || selectedPortal === 'shiplabel') ? 'Drop .xlsx here or click to browse'
                   : 'Drop CSV here or click to browse'}
               </span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--navy-500)', marginLeft: 4 }}>.csv only</span>
-              <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={handleFileInput} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--navy-500)', marginLeft: 4 }}>
+                {(selectedPortal === 'labelcrow' || selectedPortal === 'shiplabel') ? '.xlsx / .csv' : '.csv only'}
+              </span>
+              <input
+                ref={fileRef}
+                type="file"
+                accept={(selectedPortal === 'labelcrow' || selectedPortal === 'shiplabel') ? '.xlsx,.xls,.csv' : '.csv'}
+                style={{ display: 'none' }}
+                onChange={handleFileInput}
+              />
             </div>
           )}
         </div>
       </div>
 
+      {/* ── Batch nickname ─────────────────────────────────────────── */}
+      {fileName && rows.length > 0 && headerMissing.length === 0 && (
+        <div className="db-card" style={{ padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--navy-500)', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>Batch name</span>
+          <input
+            type="text"
+            value={nickName}
+            onChange={e => setNickName(e.target.value)}
+            placeholder={fileName.replace(/\.[^.]+$/, '')}
+            maxLength={200}
+            style={{ flex: 1, border: '1.5px solid var(--navy-200)', borderRadius: 8, padding: '0.3rem 0.65rem', fontSize: '0.8rem', fontFamily: 'inherit', color: 'var(--navy-800)', background: 'var(--bg-card)', outline: 'none' }}
+            onFocus={e => Object.assign(e.currentTarget.style, { borderColor: '#6366f1', boxShadow: '0 0 0 3px rgba(99,102,241,0.12)' })}
+            onBlur={e =>  Object.assign(e.currentTarget.style, { borderColor: 'var(--navy-200)', boxShadow: 'none' })}
+          />
+          <span style={{ fontSize: '0.7rem', color: 'var(--navy-400)', whiteSpace: 'nowrap' }}>ZIP will be named: <strong>{(nickName.trim() || fileName).replace(/\.[^.]+$/, '')}.zip</strong></span>
+        </div>
+      )}
+
       {/* ── Data table ───────────────────────────────────────────── */}
       {rows.length > 0 && headerMissing.length === 0 && (
-        <div className="sh-card" style={{ overflow: 'hidden' }}>
+        <div className="db-card" style={{ overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.625rem 1rem', borderBottom: '1px solid var(--navy-100)' }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--navy-600)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
               Review & Edit
             </span>
             <span style={{ fontSize: '0.78rem', color: 'var(--navy-500)' }}>{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
-            {autoLoading
-              ? <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', color: '#7C3AED' }}><div className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} />Assigning vendors…</span>
-              : Object.keys(allRowErrors).length > 0
-                ? <span className="badge badge-red"><ExclamationCircleIcon style={{ width: 10, height: 10 }} />{Object.keys(allRowErrors).length} error{Object.keys(allRowErrors).length !== 1 ? 's' : ''}</span>
-                : <span className="badge badge-green"><CheckCircleIcon style={{ width: 10, height: 10 }} />All valid</span>}
-            {isAutoMode && !autoLoading && autoVendorGroups.length > 0 && (
-              <span style={{ fontSize: '0.73rem', color: '#7C3AED', marginLeft: 4 }}>
-                {autoVendorGroups.length} vendor{autoVendorGroups.length !== 1 ? 's' : ''}: {autoVendorGroups.map(g => `${g.name} ×${g.count}`).join(', ')}
-              </span>
-            )}
+            {Object.keys(allRowErrors).length > 0
+              ? <span className="badge badge-red"><ExclamationCircleIcon style={{ width: 10, height: 10 }} />{Object.keys(allRowErrors).length} error{Object.keys(allRowErrors).length !== 1 ? 's' : ''}</span>
+              : <span className="badge badge-green"><CheckCircleIcon style={{ width: 10, height: 10 }} />All valid</span>}
             <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={addRow}>
               <PlusIcon style={{ width: 13, height: 13 }} /> Add Row
             </button>
@@ -1463,12 +1475,6 @@ const BulkLabelGenerator: React.FC = () => {
                       {col.label}{col.required && <span style={{ color: 'var(--danger-400)', marginLeft: 2 }}>*</span>}
                     </th>
                   ))}
-                  {/* Vendor column — auto mode only */}
-                  {isAutoMode && (
-                    <th style={{ padding: '0.4rem 0.5rem', textAlign: 'left', fontWeight: 700, color: '#7C3AED', fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', minWidth: 160 }}>
-                      ⚡ Vendor
-                    </th>
-                  )}
                   <th style={{ width: 36 }} />
                 </tr>
               </thead>
@@ -1476,11 +1482,16 @@ const BulkLabelGenerator: React.FC = () => {
                 {rows.map((row, rowIdx) => {
                   const errs        = allRowErrors[rowIdx] || [];
                   const hasRowError = errs.length > 0;
-                  const assignment  = isAutoMode ? rowAssignments[rowIdx] : null;
-                  const vendorError = isAutoMode && !autoLoading && rowAssignments.length > rowIdx && !assignment;
+                  const zipErrCells = new Set<string>();
+                  errs.forEach(e => {
+                    if (e.startsWith('From ZIP') && e.includes('state should be')) zipErrCells.add('from_state');
+                    if (e.startsWith('To ZIP')   && e.includes('state should be')) zipErrCells.add('to_state');
+                    if (e.startsWith('From ZIP') && e.includes('city suggestion'))  zipErrCells.add('from_city');
+                    if (e.startsWith('To ZIP')   && e.includes('city suggestion'))  zipErrCells.add('to_city');
+                  });
                   return (
+                    <React.Fragment key={rowIdx}>
                     <tr
-                      key={rowIdx}
                       style={{ borderBottom: '1px solid var(--navy-50)', background: hasRowError ? 'rgba(239,68,68,0.025)' : 'transparent' }}
                     >
                       <td style={{ padding: '0.25rem 0.5rem', color: 'var(--navy-500)', fontWeight: 600, fontSize: '0.75rem', verticalAlign: 'middle' }}>
@@ -1491,7 +1502,7 @@ const BulkLabelGenerator: React.FC = () => {
                       {TABLE_COLS.map(col => {
                         const isEmpty     = col.required && !row[col.key]?.trim();
                         const isWeightErr = col.key === 'weight' && row[col.key] && isNaN(parseFloat(row[col.key]));
-                        const cellError   = isEmpty || isWeightErr;
+                        const cellError   = isEmpty || isWeightErr || zipErrCells.has(col.key);
                         return (
                           <td key={col.key} style={{ padding: '0.2rem 0.25rem', verticalAlign: 'middle' }}>
                             <input
@@ -1503,7 +1514,7 @@ const BulkLabelGenerator: React.FC = () => {
                                 border: cellError ? '1.5px solid var(--danger-400)' : '1.5px solid var(--navy-200)',
                                 borderRadius: 6, fontSize: '0.8rem',
                                 fontFamily: 'var(--font-sans)', color: 'var(--navy-900)',
-                                background: cellError ? 'rgba(239,68,68,0.04)' : '#fff',
+                                background: cellError ? 'rgba(239,68,68,0.04)' : 'var(--bg-card)',
                                 outline: 'none', transition: 'border-color 0.15s',
                               }}
                               onFocus={e => { if (!cellError) e.target.style.borderColor = 'var(--accent-400)'; }}
@@ -1512,36 +1523,6 @@ const BulkLabelGenerator: React.FC = () => {
                           </td>
                         );
                       })}
-                      {/* Auto-vendor cell */}
-                      {isAutoMode && (
-                        <td style={{ padding: '0.2rem 0.5rem', verticalAlign: 'middle', minWidth: 160 }}>
-                          {autoLoading ? (
-                            <div className="spinner" style={{ width: 12, height: 12, borderWidth: 1.5 }} />
-                          ) : (
-                            <select
-                              value={assignment?.vendorId || ''}
-                              onChange={e => overrideRowVendor(rowIdx, e.target.value)}
-                              style={{
-                                padding: '3px 6px', borderRadius: 7,
-                                border: vendorError ? '1.5px solid var(--danger-400)' : '1.5px solid #BFDBFE',
-                                background: vendorError ? 'rgba(239,68,68,0.07)' : '#EFF6FF',
-                                color: vendorError ? 'var(--danger-600)' : '#1D4ED8',
-                                fontSize: '0.73rem', fontWeight: 700,
-                                cursor: 'pointer', outline: 'none',
-                                maxWidth: 155,
-                              }}
-                              title={vendorError ? `No vendor for state ${row.to_state} — select manually or ask admin` : assignment?.vendorName}
-                            >
-                              <option value="">— not available —</option>
-                              {allowedUspsVendors.map(v => (
-                                <option key={v.vendorId} value={v.vendorId}>
-                                  {v.vendorName}{v.shippingService ? ` (${v.shippingService})` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </td>
-                      )}
                       <td style={{ padding: '0.2rem 0.4rem', verticalAlign: 'middle' }}>
                         <button
                           onClick={() => deleteRow(rowIdx)}
@@ -1553,6 +1534,21 @@ const BulkLabelGenerator: React.FC = () => {
                         </button>
                       </td>
                     </tr>
+                    {hasRowError && (
+                      <tr style={{ background: 'rgba(239,68,68,0.04)' }}>
+                        <td />
+                        <td colSpan={TABLE_COLS.length + 1} style={{ padding: '2px 6px 5px' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {errs.map((e, ei) => (
+                              <span key={ei} style={{ fontSize: '0.68rem', color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 4, padding: '1px 7px', fontFamily: FONT }}>
+                                {e}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -1564,9 +1560,7 @@ const BulkLabelGenerator: React.FC = () => {
               <PlusIcon style={{ width: 12, height: 12 }} /> Add Row
             </button>
             <span style={{ fontSize: '0.75rem', color: 'var(--navy-500)' }}>
-              {isAutoMode
-                ? 'Vendor auto-assigned by state delivery rate · click dropdown to override'
-                : 'Click any cell to edit · red = required field missing'}
+              Click any cell to edit · red = required field missing
             </span>
           </div>
         </div>
@@ -1579,8 +1573,8 @@ const BulkLabelGenerator: React.FC = () => {
           style={{
             position: 'fixed', bottom: 0,
             left: 'var(--sidebar-w, 256px)', right: 0,
-            background: 'rgba(255,255,255,0.97)', backdropFilter: 'blur(10px)',
-            borderTop: '1px solid var(--navy-100)', boxShadow: '0 -4px 20px rgba(0,0,0,0.07)',
+            background: 'var(--bg-card)', backdropFilter: 'blur(12px)',
+            borderTop: '1px solid var(--navy-150, #e2e8f0)', boxShadow: '0 -8px 32px rgba(0,0,0,0.09)',
             padding: '0.75rem 1.5rem', zIndex: 30,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap',
           }}
@@ -1589,29 +1583,21 @@ const BulkLabelGenerator: React.FC = () => {
             {carrier && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 24, height: 24, borderRadius: 6, background: carrier.accentColor, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {isAutoMode
-                    ? <BoltIcon style={{ width: 12, height: 12, color: '#fff' }} />
-                    : <TruckIcon style={{ width: 12, height: 12, color: '#fff' }} />}
+                  <TruckIcon style={{ width: 12, height: 12, color: '#fff' }} />
                 </div>
                 <span style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy-900)' }}>{selectedCarrier}</span>
               </div>
             )}
             <span style={{ color: 'var(--navy-300)', fontSize: '0.8rem' }}>·</span>
 
-            {isAutoMode ? (
-              <span style={{ fontSize: '0.8rem', color: '#7C3AED', fontWeight: 600 }}>
-                Auto — {autoVendorGroups.length > 0 ? `${autoVendorGroups.length} vendor${autoVendorGroups.length !== 1 ? 's' : ''}` : 'assigning…'}
-              </span>
-            ) : (
-              <span style={{ fontSize: '0.8rem', color: 'var(--navy-600)' }}>{selectedVendor?.vendorName}</span>
-            )}
+            <span style={{ fontSize: '0.8rem', color: 'var(--navy-600)' }}>{selectedVendor?.vendorName}</span>
 
             <span style={{ color: 'var(--navy-300)', fontSize: '0.8rem' }}>·</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: '0.8rem', color: 'var(--navy-600)' }}>
                 <strong style={{ color: 'var(--navy-900)' }}>{rows.length}</strong> label{rows.length !== 1 ? 's' : ''}
               </span>
-              {!isAutoMode && !hasRateTiers && <>
+              {!hasRateTiers && <>
                 <span style={{ color: 'var(--navy-300)' }}>×</span>
                 <span style={{ fontSize: '0.8rem', color: 'var(--navy-600)' }}><strong>${selectedVendor?.baseRate.toFixed(2)}</strong>/ea</span>
               </>}
@@ -1619,7 +1605,7 @@ const BulkLabelGenerator: React.FC = () => {
               <span style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--accent-600)' }}>${totalCost.toFixed(2)}</span>
             </div>
 
-            {!isAutoMode && totalSavings > 0 && (
+            {totalSavings > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ color: 'var(--navy-300)', fontSize: '0.8rem' }}>·</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7', padding: '2px 10px', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700 }}>
@@ -1643,8 +1629,6 @@ const BulkLabelGenerator: React.FC = () => {
             >
               {isGenerating ? (
                 <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />Processing…</>
-              ) : isAutoMode ? (
-                <><BoltIcon style={{ width: 15, height: 15 }} />Generate {rows.length} Label{rows.length !== 1 ? 's' : ''} (Auto)</>
               ) : selectedVendor?.vendorType === 'manifest' ? (
                 <><ClipboardDocumentListIcon style={{ width: 15, height: 15 }} />Submit Manifest Job</>
               ) : (

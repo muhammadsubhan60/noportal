@@ -3,6 +3,7 @@ const UserVendorAccess = require('../models/UserVendorAccess');
 const Vendor           = require('../models/Vendor');
 const User             = require('../models/User');
 const { authenticateToken, authorize } = require('../middleware/auth');
+const { resolvePortalLabels } = require('../utils/portalLabels');
 
 const router = express.Router();
 
@@ -24,16 +25,25 @@ async function buildAccessList(userId, isAdmin = false) {
   for (const v of vendors) {
     const key = `${v._id.toString()}:${v.carrier}`;
     const rec = accessMap[key];
+    const allSeries = v.shiplabelSeries || [];
+    // Admin sees all series; users see only their allowed ones (empty allowedShiplabelSeries = all)
+    const allowed = rec ? (rec.allowedShiplabelSeries || []) : [];
+    const userSeries = isAdmin || allowed.length === 0
+      ? allSeries
+      : allSeries.filter(s => allowed.includes(s.series));
+
     result.push({
-      vendorId:        v._id,
-      vendorName:      v.name,
-      carrier:         v.carrier,
-      vendorType:      v.vendorType || 'api',
-      shippingService: v.shippingService || '',
-      baseRate:        v.rate,
-      isAllowed:       isAdmin ? true : (rec ? rec.isAllowed : false),
-      rateTiers:       rec ? rec.rateTiers : [],
-      portal:          v.source === 'labelcrow' ? 'labelcrow' : v.source === 'shiplabel' ? 'shiplabel' : 'shippershub',
+      vendorId:               v._id,
+      vendorName:             v.name,
+      carrier:                v.carrier,
+      vendorType:             v.vendorType || 'api',
+      shippingService:        v.shippingService || '',
+      baseRate:               v.rate,
+      isAllowed:              isAdmin ? true : (rec ? rec.isAllowed : false),
+      rateTiers:              rec ? rec.rateTiers : [],
+      portal:                 v.source === 'labelcrow' ? 'labelcrow' : v.source === 'shiplabel' ? 'shiplabel' : 'shippershub',
+      shiplabelSeries:        userSeries,
+      allowedShiplabelSeries: isAdmin ? allSeries.map(s => s.series) : allowed,
     });
   }
   return result;
@@ -42,8 +52,9 @@ async function buildAccessList(userId, isAdmin = false) {
 // ── GET /api/access/me ───────────────────────────────────────
 router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const result = await buildAccessList(req.user._id, req.user.role === 'admin');
-    res.json({ access: result });
+    const result       = await buildAccessList(req.user._id, req.user.role === 'admin');
+    const portalLabels = await resolvePortalLabels(req.user);
+    res.json({ access: result, portalLabels });
   } catch (err) {
     console.error('Get access (me) error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -55,6 +66,125 @@ async function resellerOwnsClient(resellerId, clientId) {
   const reseller = await User.findById(resellerId).select('clients');
   return (reseller?.clients || []).map(String).includes(String(clientId));
 }
+
+// ── PUT /api/access/bulk/vendor-access ───────────────────────
+// Bulk enable/disable specific vendors for multiple users at once.
+// Preserves existing rate tiers — only flips isAllowed.
+// Body: { userIds, vendorEntries: [{ vendorId, carrier }], isAllowed }
+router.put('/bulk/vendor-access', authenticateToken, authorize('admin', 'reseller'), async (req, res) => {
+  try {
+    const { userIds, vendorEntries, isAllowed } = req.body;
+    if (!Array.isArray(userIds) || !Array.isArray(vendorEntries)) {
+      return res.status(400).json({ message: 'userIds and vendorEntries must be arrays' });
+    }
+    if (typeof isAllowed !== 'boolean') {
+      return res.status(400).json({ message: 'isAllowed must be a boolean' });
+    }
+
+    // Resellers may only operate on their own clients
+    if (req.user.role === 'reseller') {
+      const me = await User.findById(req.user._id).select('clients');
+      const allowed = (me?.clients || []).map(String);
+      const forbidden = userIds.filter(id => !allowed.includes(String(id)));
+      if (forbidden.length) return res.status(403).json({ message: 'One or more users are not your clients' });
+    }
+
+    const ops = [];
+    for (const userId of userIds) {
+      for (const { vendorId, carrier } of vendorEntries) {
+        ops.push({
+          updateOne: {
+            filter: { user: userId, vendor: vendorId, carrier },
+            update: {
+              $set: { isAllowed },
+              $setOnInsert: { user: userId, vendor: vendorId, carrier, rateTiers: [] },
+            },
+            upsert: true,
+          },
+        });
+      }
+    }
+
+    if (ops.length > 0) await UserVendorAccess.bulkWrite(ops);
+    res.json({ message: `Updated ${ops.length} access records` });
+  } catch (err) {
+    console.error('Bulk vendor access error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── PUT /api/access/bulk/rates ───────────────────────────────
+// Bulk-set rate tiers for multiple users × vendors in one shot.
+// Body: { userIds, vendorEntries: [{ vendorId, carrier }], rateTiers, mode }
+// mode='replace'       → always overwrite tiers (default)
+// mode='skip_existing' → skip records that already have ≥1 tier
+// Auto-enables access (isAllowed: true) for new/existing records.
+router.put('/bulk/rates', authenticateToken, authorize('admin', 'reseller'), async (req, res) => {
+  try {
+    const { userIds, vendorEntries, rateTiers, mode = 'replace' } = req.body;
+
+    if (!Array.isArray(userIds) || !userIds.length)
+      return res.status(400).json({ message: 'userIds must be a non-empty array' });
+    if (!Array.isArray(vendorEntries) || !vendorEntries.length)
+      return res.status(400).json({ message: 'vendorEntries must be a non-empty array' });
+    if (!Array.isArray(rateTiers) || !rateTiers.length)
+      return res.status(400).json({ message: 'rateTiers must be a non-empty array' });
+
+    // Resellers may only operate on their own clients
+    if (req.user.role === 'reseller') {
+      const me = await User.findById(req.user._id).select('clients');
+      const allowed = (me?.clients || []).map(String);
+      const forbidden = userIds.filter(id => !allowed.includes(String(id)));
+      if (forbidden.length) return res.status(403).json({ message: 'One or more users are not your clients' });
+    }
+
+    for (const t of rateTiers) {
+      if (t.minLbs < 0) return res.status(400).json({ message: 'Min lbs cannot be negative' });
+      if (t.maxLbs !== null && t.maxLbs !== undefined && t.maxLbs <= t.minLbs)
+        return res.status(400).json({ message: 'Max lbs must be greater than Min lbs' });
+      if (t.rate < 0) return res.status(400).json({ message: 'Rate cannot be negative' });
+    }
+
+    // Build set of records to skip (those that already have tiers)
+    const skipKeys = new Set();
+    if (mode === 'skip_existing') {
+      const existing = await UserVendorAccess.find({
+        user:   { $in: userIds },
+        vendor: { $in: vendorEntries.map(e => e.vendorId) },
+        'rateTiers.0': { $exists: true },
+      }).select('user vendor carrier').lean();
+      existing.forEach(r => skipKeys.add(`${r.user}:${r.vendor}:${r.carrier}`));
+    }
+
+    const ops = [];
+    for (const userId of userIds) {
+      for (const { vendorId, carrier } of vendorEntries) {
+        if (skipKeys.has(`${userId}:${vendorId}:${carrier}`)) continue;
+        ops.push({
+          updateOne: {
+            filter: { user: userId, vendor: vendorId, carrier },
+            update: {
+              $set:        { isAllowed: true, rateTiers },
+              $setOnInsert: { user: userId, vendor: vendorId, carrier },
+            },
+            upsert: true,
+          },
+        });
+      }
+    }
+
+    if (ops.length > 0) await UserVendorAccess.bulkWrite(ops);
+    const skipped = (userIds.length * vendorEntries.length) - ops.length;
+    res.json({
+      message: `Updated ${ops.length} record(s)${skipped > 0 ? `, skipped ${skipped} (already had tiers)` : ''}`,
+      updated: ops.length,
+      skipped,
+    });
+  } catch (err) {
+    console.error('Bulk rates error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 // ── GET /api/access/:userId ───────────────────────────────────
 router.get('/:userId', authenticateToken, authorize('admin', 'reseller'), async (req, res) => {

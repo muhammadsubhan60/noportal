@@ -4,6 +4,7 @@ const User    = require('../models/User');
 const Balance = require('../models/Balance');
 const Rate    = require('../models/Rate');
 const { authenticateToken, authorize } = require('../middleware/auth');
+const { validatePassword } = require('../utils/passwordPolicy');
 
 const router = express.Router();
 
@@ -72,7 +73,11 @@ router.post('/reseller/clients', authenticateToken, authorize('admin', 'reseller
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
-  body('password').isLength({ min: 12 }).withMessage('Password must be at least 12 characters'),
+  body('password').custom(value => {
+    const err = validatePassword(value);
+    if (err) throw new Error(err);
+    return true;
+  }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -154,7 +159,11 @@ router.post('/', authenticateToken, authorize('admin'), [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
-  body('password').isLength({ min: 12 }).withMessage('Password must be at least 12 characters'),
+  body('password').custom(value => {
+    const err = validatePassword(value);
+    if (err) throw new Error(err);
+    return true;
+  }),
   body('role').isIn(['admin', 'reseller', 'user']).withMessage('Invalid role')
 ], async (req, res) => {
   try {
@@ -256,6 +265,44 @@ router.put('/:id', authenticateToken, [
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ message: 'Server error updating user' });
+  }
+});
+
+// ── PUT /api/users/:id/password ───────────────────────────────
+// Self-serve password change — requires the current password.
+router.put('/:id/password', authenticateToken, [
+  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('newPassword').custom(value => {
+    const err = validatePassword(value);
+    if (err) throw new Error(err);
+    return true;
+  }),
+], async (req, res) => {
+  try {
+    if (req.user._id.toString() !== req.params.id) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: errors.array()[0].msg });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    const user = await User.findById(req.params.id).select('+password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const matches = await user.comparePassword(currentPassword);
+    if (!matches) return res.status(400).json({ message: 'Current password is incorrect' });
+
+    user.password = newPassword;
+    await user.save();
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ message: 'Server error updating password' });
   }
 });
 

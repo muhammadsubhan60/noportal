@@ -7,12 +7,18 @@ interface User {
   firstName: string;
   lastName: string;
   email: string;
-  role: 'admin' | 'reseller' | 'user';
+  role: 'superadmin' | 'admin' | 'reseller' | 'user';
   fullName: string;
   lastLogin?: string;
   isActive: boolean;
   createdAt: string;
   clients?: string[];
+  ccAccess?: boolean;
+  portalLabels?: {
+    shippershub?: string | null;
+    labelcrow?: string | null;
+    shiplabel?: string | null;
+  };
 }
 
 interface AuthState {

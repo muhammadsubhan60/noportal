@@ -2,15 +2,17 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-type Role = 'admin' | 'reseller' | 'user';
+type Role = 'superadmin' | 'admin' | 'reseller' | 'user';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
   /** If provided, user must have one of these roles or they are redirected to /dashboard */
   roles?: Role[];
+  /** Also allow resellers with the ccAccess delegate flag, even if not in `roles` */
+  allowCC?: boolean;
 }
 
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, roles }) => {
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, roles, allowCC }) => {
   const { isAuthenticated, user, isLoading } = useAuth();
 
   if (isLoading) {
@@ -50,7 +52,13 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, roles }) => {
     return <Navigate to="/login" replace />;
   }
 
+  // Superadmin belongs only in /superadmin — bounce them out of the main portal
+  if (user?.role === 'superadmin' && (!roles || !roles.includes('superadmin'))) {
+    return <Navigate to="/superadmin" replace />;
+  }
+
   if (roles && user && !roles.includes(user.role as Role)) {
+    if (allowCC && user.role === 'reseller' && user.ccAccess) return <>{children}</>;
     return <Navigate to="/dashboard" replace />;
   }
 

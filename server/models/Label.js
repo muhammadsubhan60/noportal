@@ -82,7 +82,7 @@ const labelSchema = new mongoose.Schema({
 
   trackingStatus: {
     type: String,
-    enum: ['not_scanned_yet', 'in_transit', 'out_for_delivery', 'delivered', 'exception_problem', 'returned_to_sender', 'pending_pickup', 'delayed'],
+    enum: ['not_scanned_yet', 'in_transit', 'out_for_delivery', 'delivered', 'exception_problem', 'returned_to_sender', 'pending_pickup', 'delayed', 'voided'],
     default: 'not_scanned_yet'
   },
 

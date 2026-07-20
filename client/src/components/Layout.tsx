@@ -29,6 +29,12 @@ import {
   MapIcon,
   TrophyIcon,
   SparklesIcon,
+  LightBulbIcon,
+  CommandLineIcon,
+  ExclamationTriangleIcon,
+  PuzzlePieceIcon,
+  ShoppingBagIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Announcement types ────────────────────────────────────────────────────────
@@ -62,6 +68,7 @@ interface NavItem {
   href: string;
   icon: React.ElementType;
   current: boolean;
+  badge?: number;
 }
 
 interface NavSection {
@@ -76,10 +83,12 @@ const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen]   = useState(false);
   const [collapsed, setCollapsed]       = useState(() => localStorage.getItem(COLLAPSED_KEY) === '1');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    overview: true, labels: true, operations: true, finance: true, management: true, account: true,
+    overview: true, labels: true, operations: true, finance: true, management: true,
   });
   const [tooltip, setTooltip] = useState<{ name: string; y: number } | null>(null);
-  const tooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipShowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const adminDefaultsApplied = useRef(false);
 
   // ── Announcement state ─────────────────────────────────────────────────────
   const [announcements,  setAnnouncements]  = useState<Announcement[]>([]);
@@ -87,12 +96,14 @@ const Layout: React.FC = () => {
   const [alertIdx,       setAlertIdx]       = useState(0);   // which undismissed item to show
   const [bellOpen,       setBellOpen]       = useState(false);
   const [unreadCount,    setUnreadCount]    = useState(0);
-  const bellRef = useRef<HTMLDivElement>(null);
+  const bellRef    = useRef<HTMLDivElement>(null);
+  const bellBtnRef = useRef<HTMLButtonElement>(null);
 
   const { user, logout } = useAuth();
   const location         = useLocation();
   const navigate         = useNavigate();
   const [balance, setBalance] = useState<number | null>(null);
+  const [navCounts, setNavCounts] = useState<{ users?: number; manifestsUnderReview?: number; labelsToday?: number; clientCount?: number }>({});
 
   // Fetch balance
   useEffect(() => {
@@ -100,6 +111,34 @@ const Layout: React.FC = () => {
     const token = localStorage.getItem('token');
     axios.get(`${API_BASE}/balance`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => setBalance(res.data?.balance?.currentBalance ?? 0))
+      .catch(() => {});
+  }, [user]);
+
+  // Admins rarely use their own label tools day-to-day — start that section
+  // collapsed so the sidebar opens on admin-relevant sections instead.
+  // Runs once, so it never fights a manual toggle afterward.
+  useEffect(() => {
+    if (!user || adminDefaultsApplied.current) return;
+    adminDefaultsApplied.current = true;
+    if (user.role === 'admin') {
+      setOpenSections(prev => ({ ...prev, labels: false }));
+    }
+  }, [user]);
+
+  // Fetch nav badge counts (admin/reseller only) — reuses the existing role-aware
+  // /api/stats endpoint rather than a bespoke counts endpoint.
+  useEffect(() => {
+    if (!user || user.role === 'user') return;
+    const token = localStorage.getItem('token');
+    axios.get(`${API_BASE}/stats`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => {
+        const d = res.data;
+        if (user.role === 'admin') {
+          setNavCounts({ users: d.users?.total, manifestsUnderReview: d.manifests?.underReview, labelsToday: d.labels?.today });
+        } else if (user.role === 'reseller') {
+          setNavCounts({ clientCount: d.clientCount });
+        }
+      })
       .catch(() => {});
   }, [user]);
 
@@ -140,10 +179,13 @@ const Layout: React.FC = () => {
       .catch(() => {});
   }, [user]);
 
-  // Close bell dropdown when clicking outside
+  // Close bell dropdown when clicking outside (both dropdown and trigger button)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false);
+      if (
+        bellRef.current    && !bellRef.current.contains(e.target as Node) &&
+        bellBtnRef.current && !bellBtnRef.current.contains(e.target as Node)
+      ) setBellOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -179,28 +221,50 @@ const Layout: React.FC = () => {
   };
 
   // ── Navigation definitions ──────────────────────────────────────────────
-  const overviewNav: NavItem[] = [
+  // Admin lands on "Admin Panel" + "Live Monitor" instead of the vanity
+  // Dashboard/Live Activity views — /dashboard already redirects admins to
+  // /admin, so surfacing "Dashboard" for them would be a dead click.
+  const overviewNav: NavItem[] = user?.role === 'admin' ? [
+    { name: 'Admin Panel',    href: '/admin',            icon: Squares2X2Icon,  current: location.pathname === '/admin' },
+    { name: 'Live Monitor',   href: '/admin/live',       icon: SignalIcon,      current: location.pathname === '/admin/live', badge: navCounts.labelsToday },
+    { name: 'Command Center', href: '/command-center',   icon: CommandLineIcon, current: location.pathname.startsWith('/command-center') },
+    { name: 'Announcements',  href: '/announcements',    icon: MegaphoneIcon,   current: location.pathname === '/announcements' },
+    { name: 'Suggestions',    href: '/suggestions',      icon: LightBulbIcon,   current: location.pathname === '/suggestions' },
+  ] : user?.role === 'reseller' ? [
     { name: 'Dashboard',     href: '/dashboard',     icon: HomeIcon,      current: location.pathname === '/dashboard' },
     { name: 'Announcements', href: '/announcements', icon: MegaphoneIcon, current: location.pathname === '/announcements' },
     { name: 'Live Activity', href: '/activity',      icon: SignalIcon,    current: location.pathname === '/activity' },
+    { name: 'Leaderboard',   href: '/leaderboard',   icon: TrophyIcon,    current: location.pathname === '/leaderboard' },
+    { name: 'Suggestions',   href: '/suggestions',   icon: LightBulbIcon, current: location.pathname === '/suggestions' },
+  ] : [
+    // Live Activity removed for plain users for now
+    { name: 'Dashboard',     href: '/dashboard',     icon: HomeIcon,      current: location.pathname === '/dashboard' },
+    { name: 'Announcements', href: '/announcements', icon: MegaphoneIcon, current: location.pathname === '/announcements' },
+    { name: 'Leaderboard',   href: '/leaderboard',   icon: TrophyIcon,    current: location.pathname === '/leaderboard' },
+    { name: 'Suggestions',   href: '/suggestions',   icon: LightBulbIcon, current: location.pathname === '/suggestions' },
   ];
 
   const labelsNav: NavItem[] = [
     { name: 'Single Label',     href: '/labels/single',       icon: TagIcon,                   current: location.pathname === '/labels/single' },
     { name: 'Bulk Labels',      href: '/labels/bulk',          icon: RectangleStackIcon,        current: location.pathname === '/labels/bulk' },
-    { name: 'Leaderboard',      href: '/leaderboard',         icon: TrophyIcon,                current: location.pathname === '/leaderboard' },
     { name: 'Single History',   href: '/labels/history',      icon: ClipboardDocumentListIcon, current: location.pathname === '/labels/history' },
     { name: 'Bulk History',     href: '/labels/bulk-history', icon: ClipboardDocumentListIcon, current: location.pathname === '/labels/bulk-history' },
     { name: 'Manifest History', href: '/manifest/history',    icon: Squares2X2Icon,            current: location.pathname === '/manifest/history' },
   ];
 
-  // Admin — Operations
+  // Command Center — its own section only for a reseller with delegate access;
+  // for admin it lives inside Overview (see above) instead of a lone-item section.
+  const ccItems: NavItem[] = (user?.role === 'reseller' && user?.ccAccess) ? [
+    { name: 'Command Center', href: '/command-center', icon: CommandLineIcon, current: location.pathname.startsWith('/command-center') },
+  ] : [];
+
+  // Admin — Operations (Live Monitor now lives in Overview, see above)
   const adminOpsItems: NavItem[] = user?.role === 'admin' ? [
-    { name: 'Live Monitor', href: '/admin/live',     icon: SignalIcon,     current: location.pathname === '/admin/live' },
-    { name: 'Manifest Ops', href: '/admin/manifest', icon: Squares2X2Icon, current: location.pathname === '/admin/manifest' },
+    { name: 'Manifest Ops', href: '/admin/manifest', icon: Squares2X2Icon, current: location.pathname === '/admin/manifest', badge: navCounts.manifestsUnderReview },
     { name: 'Warehouses',   href: '/admin/warehouses', icon: CubeIcon, current: location.pathname === '/admin/warehouses' },
     { name: 'State Analytics',   href: '/admin/states',                icon: MapIcon,       current: location.pathname === '/admin/states' },
     { name: 'AI Bulk Tracking', href: '/admin/bulk-tracking-update', icon: SparklesIcon,  current: location.pathname === '/admin/bulk-tracking-update' },
+    { name: 'Logs & Errors', href: '/admin/logs', icon: ExclamationTriangleIcon, current: location.pathname === '/admin/logs' },
   ] : [];
 
   // Admin — Finance
@@ -211,34 +275,29 @@ const Layout: React.FC = () => {
   ] : [];
 
   // Admin — Management | Reseller — Clients
+  // ("Admin Panel" now lives in Overview, see overviewNav above)
   const mgmtItems: NavItem[] = user?.role === 'admin' ? [
-    { name: 'Admin Panel', href: '/admin',              icon: Squares2X2Icon,         current: location.pathname === '/admin' },
-    { name: 'Users',       href: '/admin/users',        icon: UserGroupIcon,          current: location.pathname.startsWith('/admin/users') },
+    { name: 'Users',       href: '/admin/users',        icon: UserGroupIcon,          current: location.pathname.startsWith('/admin/users'), badge: navCounts.users },
     { name: 'Vendors',     href: '/admin/vendors',      icon: BuildingStorefrontIcon, current: location.pathname === '/admin/vendors' },
+    { name: 'Bulk Vendor Access', href: '/admin/bulk-vendor-access', icon: UsersIcon, current: location.pathname === '/admin/bulk-vendor-access' },
+    { name: 'User Stats',  href: '/admin/user-stats',   icon: PresentationChartLineIcon, current: location.pathname === '/admin/user-stats' },
     { name: 'Settings',    href: '/admin/settings',     icon: Cog6ToothIcon,          current: location.pathname === '/admin/settings' },
   ] : user?.role === 'reseller' ? [
-    { name: 'My Clients', href: '/reseller/clients', icon: UserGroupIcon, current: location.pathname.startsWith('/reseller/clients') },
-    { name: 'Finance',    href: '/reseller/finance', icon: BanknotesIcon, current: location.pathname === '/reseller/finance' },
+    { name: 'My Clients', href: '/reseller/clients',    icon: UserGroupIcon,             current: location.pathname.startsWith('/reseller/clients'), badge: navCounts.clientCount },
+    { name: 'Bulk Access', href: '/reseller/bulk-access', icon: UsersIcon,               current: location.pathname === '/reseller/bulk-access' },
+    { name: 'User Stats',  href: '/reseller/user-stats',  icon: PresentationChartLineIcon, current: location.pathname === '/reseller/user-stats' },
+    { name: 'Finance',    href: '/reseller/finance',    icon: BanknotesIcon,             current: location.pathname === '/reseller/finance' },
   ] : [];
-
-  const accountNav: NavItem[] = [
-    { name: 'Topup History', href: '/topups', icon: BanknotesIcon,  current: location.pathname === '/topups' },
-    { name: 'Payment History', href: '/payments', icon: BookOpenIcon, current: location.pathname === '/payments' },
-    { name: 'Profile',     href: '/profile',  icon: UserIcon,       current: location.pathname === '/profile' },
-  ];
 
   const sections: NavSection[] = [
     { key: 'overview',    label: 'Overview',    items: overviewNav },
     { key: 'labels',      label: 'Labels',      items: labelsNav },
+    ...(ccItems.length > 0           ? [{ key: 'cc',         label: 'Command Center', items: ccItems }]          : []),
     ...(adminOpsItems.length > 0     ? [{ key: 'operations', label: 'Operations',  items: adminOpsItems }]     : []),
     ...(adminFinanceItems.length > 0 ? [{ key: 'finance',    label: 'Finance',     items: adminFinanceItems }] : []),
     ...(mgmtItems.length > 0         ? [{ key: 'management', label: user?.role === 'reseller' ? 'Clients' : 'Management', items: mgmtItems }] : []),
-    { key: 'account',     label: 'Account',     items: accountNav },
   ];
 
-  const allNav = [...overviewNav, ...labelsNav, ...adminOpsItems, ...adminFinanceItems, ...mgmtItems, ...accountNav];
-  const activePage = allNav.find(n => n.current);
-  const activeSection = sections.find(s => s.items.some(i => i.name === activePage?.name));
   const initials  = `${user?.firstName?.charAt(0) ?? ''}${user?.lastName?.charAt(0) ?? ''}`;
 
   const roleChip = user?.role === 'admin'
@@ -257,11 +316,15 @@ const Layout: React.FC = () => {
     const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLElement>) => {
       if (!collapsed) return;
       if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+      if (tooltipShowTimer.current) clearTimeout(tooltipShowTimer.current);
       const rect = e.currentTarget.getBoundingClientRect();
-      setTooltip({ name: item.name, y: rect.top + rect.height / 2 });
+      tooltipShowTimer.current = setTimeout(() => {
+        setTooltip({ name: item.name, y: rect.top + rect.height / 2 });
+      }, 130);
     }, [item.name]);
 
     const handleMouseLeave = useCallback(() => {
+      if (tooltipShowTimer.current) clearTimeout(tooltipShowTimer.current);
       tooltipTimer.current = setTimeout(() => setTooltip(null), 80);
     }, []);
 
@@ -276,6 +339,9 @@ const Layout: React.FC = () => {
         >
           <item.icon className="nav-icon" />
           {!collapsed && <span className="nav-label">{item.name}</span>}
+          {!collapsed && !!item.badge && (
+            <span className="nav-badge-pill">{item.badge > 999 ? '999+' : item.badge}</span>
+          )}
           {item.current && !collapsed && <span className="nav-active-dot" />}
         </Link>
       </div>
@@ -368,8 +434,8 @@ const Layout: React.FC = () => {
             </div>
             {!collapsed && (
               <div style={{ overflow: 'hidden', flex: 1 }}>
-                <div className="sidebar-brand-name">Label Flow</div>
-                <div className="sidebar-brand-sub">Label Flow</div>
+                <div className="sidebar-brand-name">LABEL FLOW</div>
+                <div className="sidebar-brand-sub">Shipping Portal</div>
               </div>
             )}
           </div>
@@ -444,194 +510,83 @@ const Layout: React.FC = () => {
         {/* ── User footer ─────────────────────────────────────────────── */}
         <div className={`sidebar-footer${collapsed ? ' sidebar-footer-collapsed' : ''}`}>
           {collapsed ? (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
-                <div className="avatar avatar-sm avatar-indigo" title={`${user?.firstName} ${user?.lastName} · ${user?.role}`}>
-                  {initials}
-                </div>
+            /* Collapsed: stack avatar → balance → action icons */
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+              <div
+                className="avatar avatar-sm avatar-indigo"
+                title={`${user?.firstName} ${user?.lastName} · ${user?.role} — View profile`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate('/profile')}
+              >
+                {initials}
               </div>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <button onClick={handleLogout} title="Sign out" className="sidebar-logout-btn">
-                  <ArrowLeftOnRectangleIcon style={{ width: 16, height: 16 }} />
-                </button>
+              <div style={{ fontSize: '0.58rem', fontWeight: 800, color: '#4ade80', letterSpacing: '-0.2px' }}>
+                {balance === null ? '—' : `$${balance.toFixed(2)}`}
               </div>
-            </>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div className="avatar avatar-sm avatar-indigo">{initials}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {user?.firstName} {user?.lastName}
-                </div>
-                <span style={{
-                  display: 'inline-block', marginTop: 2,
-                  fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.07em',
-                  textTransform: 'uppercase', padding: '1px 7px', borderRadius: 99,
-                  background: roleChip.bg, color: roleChip.color,
-                }}>
-                  {roleChip.label}
-                </span>
-              </div>
-              <button onClick={handleLogout} title="Sign out" className="sidebar-logout-btn">
-                <ArrowLeftOnRectangleIcon style={{ width: 16, height: 16 }} />
+              <button ref={bellBtnRef} className="sidebar-footer-btn" onClick={openBell} title="Notifications">
+                <BellIcon style={{ width: 14, height: 14 }} />
+                {unreadCount > 0 && <span className="bell-badge" />}
+              </button>
+              <ThemeToggle compact className="sidebar-footer-btn" />
+              <button onClick={handleLogout} title="Sign out" className="sidebar-footer-btn logout">
+                <ArrowLeftOnRectangleIcon style={{ width: 14, height: 14 }} />
               </button>
             </div>
+          ) : (
+            /* Expanded: user info row → divider → balance + action row */
+            <>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10, cursor: 'pointer' }}
+                onClick={() => navigate('/profile')}
+                title="View profile"
+              >
+                <div className="avatar avatar-sm avatar-indigo">{initials}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {user?.firstName} {user?.lastName}
+                  </div>
+                  <span style={{
+                    display: 'inline-block', marginTop: 2,
+                    fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.07em',
+                    textTransform: 'uppercase', padding: '1px 7px', borderRadius: 99,
+                    background: roleChip.bg, color: roleChip.color,
+                  }}>
+                    {roleChip.label}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', marginBottom: 10 }} />
+
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                {/* Balance */}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 1 }}>
+                    Balance
+                  </div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#4ade80', letterSpacing: '-0.3px' }}>
+                    {balance === null ? '—' : `$${balance.toFixed(2)}`}
+                  </div>
+                </div>
+                {/* Action buttons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button ref={bellBtnRef} className="sidebar-footer-btn" onClick={openBell} title="Notifications">
+                    <BellIcon style={{ width: 15, height: 15 }} />
+                    {unreadCount > 0 && <span className="bell-badge" />}
+                  </button>
+                  <ThemeToggle compact className="sidebar-footer-btn" />
+                  <button onClick={handleLogout} title="Sign out" className="sidebar-footer-btn logout">
+                    <ArrowLeftOnRectangleIcon style={{ width: 15, height: 15 }} />
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </aside>
 
       {/* ── Main content ────────────────────────────────────────────── */}
       <div className={`main-content${collapsed ? ' sidebar-collapsed' : ''}`}>
-
-        {/* Top bar */}
-        <header className="top-bar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-
-            {/* Mobile hamburger */}
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              className="mobile-menu-btn"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--navy-500)', padding: 4, borderRadius: 6, display: 'none' }}
-            >
-              <Bars3Icon style={{ width: 22, height: 22 }} />
-            </button>
-
-            {/* Breadcrumb */}
-            <nav style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              {activeSection && activePage && (
-                <>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--navy-400)', fontWeight: 500 }}>
-                    {activeSection.label}
-                  </span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--navy-300)' }}>/</span>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-800)' }}>
-                    {activePage.name}
-                  </span>
-                </>
-              )}
-              {!activePage && (
-                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-800)' }}>Dashboard</span>
-              )}
-            </nav>
-          </div>
-
-          {/* Right side */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ThemeToggle compact className="topbar-icon-btn" />
-
-            {/* Notification bell */}
-            <div ref={bellRef} style={{ position: 'relative' }}>
-              <button
-                className="topbar-icon-btn"
-                title="Notifications"
-                onClick={openBell}
-                style={{ position: 'relative' }}
-              >
-                <BellIcon style={{ width: 17, height: 17 }} />
-                {unreadCount > 0 && (
-                  <span style={{
-                    position: 'absolute', top: 2, right: 2,
-                    width: 8, height: 8, borderRadius: '50%',
-                    background: '#EF4444', border: '1.5px solid #fff',
-                  }} />
-                )}
-              </button>
-
-              {/* Bell dropdown */}
-              {bellOpen && (
-                <div style={{
-                  position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                  width: 340, background: '#fff', borderRadius: 14,
-                  border: '1.5px solid var(--navy-150, #e8edf5)',
-                  boxShadow: '0 16px 48px rgba(0,0,0,0.14)',
-                  zIndex: 9000, overflow: 'hidden',
-                }}>
-                  {/* Header */}
-                  <div style={{
-                    padding: '0.85rem 1.1rem 0.7rem',
-                    borderBottom: '1px solid var(--navy-100)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  }}>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-900)' }}>Announcements</span>
-                    <button
-                      onClick={() => { setBellOpen(false); navigate('/announcements'); }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: 'var(--accent-600)', fontWeight: 600 }}
-                    >
-                      View all →
-                    </button>
-                  </div>
-
-                  {/* Items */}
-                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-                    {announcements.length === 0 ? (
-                      <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--navy-400)', fontSize: '0.82rem' }}>
-                        No announcements yet.
-                      </div>
-                    ) : (
-                      announcements.slice(0, 6).map((a, i) => {
-                        const cat = CAT_STYLE[a.category] ?? CAT_STYLE.general;
-                        const isNew = !localStorage.getItem(LAST_SEEN_KEY) ||
-                          new Date(a.createdAt) > new Date(localStorage.getItem(LAST_SEEN_KEY)!);
-                        return (
-                          <div
-                            key={a._id}
-                            onClick={() => { setBellOpen(false); navigate('/announcements'); }}
-                            style={{
-                              display: 'flex', gap: 10, padding: '0.7rem 1.1rem',
-                              borderBottom: i < announcements.slice(0,6).length - 1 ? '1px solid var(--navy-50)' : 'none',
-                              cursor: 'pointer', background: isNew ? `${cat.bg}80` : '#fff',
-                              transition: 'background 0.1s',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--navy-50)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = isNew ? `${cat.bg}80` : '#fff')}
-                          >
-                            {/* Accent bar */}
-                            <div style={{ width: 3, borderRadius: 99, background: cat.bar, flexShrink: 0, alignSelf: 'stretch', minHeight: 28 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                <span style={{
-                                  fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.05em',
-                                  textTransform: 'uppercase', padding: '1px 6px', borderRadius: 99,
-                                  background: cat.badge, color: cat.badgeText,
-                                }}>
-                                  {CAT_LABEL[a.category]}
-                                </span>
-                                {isNew && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#EF4444', flexShrink: 0 }} />}
-                              </div>
-                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--navy-800)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {a.title}
-                              </div>
-                              <div style={{ fontSize: '0.7rem', color: 'var(--navy-400)', marginTop: 1 }}>
-                                {new Date(a.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Divider */}
-            <div style={{ width: 1, height: 24, background: 'var(--navy-100)' }} />
-
-            {/* User chip */}
-            <div className="topbar-user-chip" style={{ cursor: 'default' }}>
-              <div className="avatar avatar-sm avatar-indigo">{initials}</div>
-              <div style={{ lineHeight: 1.3 }}>
-                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#059669' }}>
-                  {balance === null ? '—' : `$${balance.toFixed(2)}`}
-                </div>
-                <div style={{ fontSize: '0.67rem', color: 'var(--navy-500)', textTransform: 'capitalize' }}>
-                  {user?.role}
-                </div>
-              </div>
-            </div>
-          </div>
-        </header>
 
         {/* Page content */}
         <main className="page-content">
@@ -640,6 +595,119 @@ const Layout: React.FC = () => {
           </div>
         </main>
       </div>
+
+      {/* ── Mobile bottom navigation ─────────────────────────── */}
+      <nav className="mobile-bottom-nav">
+        {[
+          { href: '/dashboard',     icon: HomeIcon,           name: 'Home',    current: location.pathname === '/dashboard' },
+          { href: '/labels/single', icon: TagIcon,            name: 'Label',   current: location.pathname === '/labels/single' },
+          { href: '/labels/bulk',   icon: RectangleStackIcon, name: 'Bulk',    current: location.pathname === '/labels/bulk' },
+          { href: '/profile',       icon: UserIcon,           name: 'Profile', current: location.pathname === '/profile' },
+        ].map(item => (
+          <Link
+            key={item.href}
+            to={item.href}
+            className={`mobile-nav-item${item.current ? ' active' : ''}`}
+            onClick={() => setSidebarOpen(false)}
+          >
+            <item.icon style={{ width: 22, height: 22 }} />
+            <span>{item.name}</span>
+          </Link>
+        ))}
+        <button
+          className="mobile-nav-item"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <Bars3Icon style={{ width: 22, height: 22 }} />
+          <span>More</span>
+        </button>
+      </nav>
+
+      {/* ── Bell dropdown — fixed to escape sidebar overflow-x:hidden ── */}
+      {bellOpen && (
+        <div
+          ref={bellRef}
+          style={{
+            position: 'fixed',
+            left: 'var(--sidebar-w, 256px)',
+            bottom: 8,
+            marginLeft: 10,
+            width: 340,
+            background: 'var(--bg-card)',
+            borderRadius: 14,
+            border: '1.5px solid var(--navy-200)',
+            boxShadow: '0 -6px 32px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.06)',
+            zIndex: 9100,
+            overflow: 'hidden',
+            animation: 'fadeInUp 0.18s ease both',
+          }}
+        >
+          {/* Header */}
+          <div style={{
+            padding: '0.85rem 1.1rem 0.7rem',
+            borderBottom: '1px solid var(--navy-100)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--navy-900)' }}>Announcements</span>
+            <button
+              onClick={() => { setBellOpen(false); navigate('/announcements'); }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: 'var(--accent-600)', fontWeight: 600 }}
+            >
+              View all →
+            </button>
+          </div>
+
+          {/* Items */}
+          <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+            {announcements.length === 0 ? (
+              <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--navy-400)', fontSize: '0.82rem' }}>
+                No announcements yet.
+              </div>
+            ) : (
+              announcements.slice(0, 6).map((a, i) => {
+                const cat = CAT_STYLE[a.category] ?? CAT_STYLE.general;
+                const isNew = !localStorage.getItem(LAST_SEEN_KEY) ||
+                  new Date(a.createdAt) > new Date(localStorage.getItem(LAST_SEEN_KEY)!);
+                return (
+                  <div
+                    key={a._id}
+                    onClick={() => { setBellOpen(false); navigate('/announcements'); }}
+                    style={{
+                      display: 'flex', gap: 10, padding: '0.7rem 1.1rem',
+                      borderBottom: i < announcements.slice(0, 6).length - 1 ? '1px solid var(--navy-50)' : 'none',
+                      cursor: 'pointer',
+                      background: isNew ? `${cat.bg}80` : 'var(--bg-card)',
+                      transition: 'background 0.1s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--navy-50)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = isNew ? `${cat.bg}80` : 'var(--bg-card)')}
+                  >
+                    <div style={{ width: 3, borderRadius: 99, background: cat.bar, flexShrink: 0, alignSelf: 'stretch', minHeight: 28 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                        <span style={{
+                          fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.05em',
+                          textTransform: 'uppercase', padding: '1px 6px', borderRadius: 99,
+                          background: cat.badge, color: cat.badgeText,
+                        }}>
+                          {CAT_LABEL[a.category]}
+                        </span>
+                        {isNew && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#EF4444', flexShrink: 0 }} />}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--navy-800)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {a.title}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--navy-400)', marginTop: 1 }}>
+                        {new Date(a.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Fixed tooltip — escapes sidebar overflow clipping */}
       {collapsed && tooltip && (
@@ -683,6 +751,17 @@ const Layout: React.FC = () => {
       )}
 
       <style>{`
+        .nav-badge-pill {
+          margin-left: 6px;
+          font-size: 0.58rem;
+          font-weight: 700;
+          padding: 1px 6px;
+          border-radius: 99px;
+          background: rgba(99, 102, 241, 0.22);
+          color: #a5b4fc;
+          border: 1px solid rgba(99, 102, 241, 0.25);
+          flex-shrink: 0;
+        }
         @keyframes tooltipPop {
           from { opacity: 0; transform: translateY(-50%) scale(0.88) translateX(-6px); }
           to   { opacity: 1; transform: translateY(-50%) scale(1)    translateX(0); }
@@ -692,7 +771,6 @@ const Layout: React.FC = () => {
           to   { opacity: 1; max-height: 60px; }
         }
         @media (max-width: 768px) {
-          .mobile-menu-btn        { display: flex !important; }
           .sidebar-collapse-btn   { display: none !important; }
           .sidebar-mobile-close   { display: flex !important; }
         }

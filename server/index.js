@@ -36,6 +36,8 @@ const equityPartnerRoutes      = require('./routes/equityPartners');
 const financialDashboardRoutes = require('./routes/financialDashboard');
 const shippershubAccountRoutes      = require('./routes/shippershubAccounts');
 const leaderboardRoutes             = require('./routes/leaderboard');
+const suggestionRoutes              = require('./routes/suggestions');
+const errorLogRoutes                = require('./routes/errorLogs');
 
 // ── Startup validation ────────────────────────────────────────
 // Fail fast rather than running in a broken / insecure state.
@@ -176,6 +178,8 @@ app.use('/api/equity-partners',       equityPartnerRoutes);
 app.use('/api/financial-dashboard',   financialDashboardRoutes);
 app.use('/api/shippershub-accounts',  shippershubAccountRoutes);
 app.use('/api/leaderboard',           leaderboardRoutes);
+app.use('/api/suggestions',           suggestionRoutes);
+app.use('/api/error-logs',            errorLogRoutes);
 
 // ── Health check ──────────────────────────────────────────────
 // Returns minimal info only — no internal state exposed publicly

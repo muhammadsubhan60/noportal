@@ -24,14 +24,22 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password is required'],
-    minlength: [12, 'Password must be at least 12 characters'],
+    // Floor only — actual policy is enforced per-route (8+special for self-serve
+    // accounts in auth.js, 6-digit numeric PIN for admin/reseller-created accounts
+    // in users.js) since the two flows have very different password models.
+    minlength: [6, 'Password must be at least 6 characters'],
     select: false
   },
   role: {
     type: String,
-    enum: ['admin', 'reseller', 'user'],
+    enum: ['superadmin', 'admin', 'reseller', 'user'],
     default: 'user'
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true,
   },
   isActive: {
     type: Boolean,
@@ -42,6 +50,9 @@ const userSchema = new mongoose.Schema({
   },
   resetPasswordToken: String,
   resetPasswordExpire: Date,
+  emailVerified: { type: Boolean, default: true },
+  otp: String,
+  otpExpire: Date,
   // For resellers - track their clients
   clients: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -56,6 +67,12 @@ const userSchema = new mongoose.Schema({
   source: {
     type: String,
     enum: ['Organic', 'Paid Ads', null],
+    default: null,
+  },
+  phone: {
+    type: String,
+    trim: true,
+    maxlength: [20, 'Phone number cannot exceed 20 characters'],
     default: null,
   },
   // Notification preferences
@@ -73,6 +90,19 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: 0,
+  },
+  // Command Center delegate access — admin-granted, reseller-only
+  ccAccess: {
+    type: Boolean,
+    default: false,
+  },
+  // Reseller white-label: custom names shown to this reseller's own client
+  // users instead of the raw portal brand (ShippersHub / Label Crow / ShipLabel).
+  // null/unset = client sees a generic neutral name, never the raw brand.
+  portalLabels: {
+    shippershub: { type: String, default: null, trim: true, maxlength: 40 },
+    labelcrow:   { type: String, default: null, trim: true, maxlength: 40 },
+    shiplabel:   { type: String, default: null, trim: true, maxlength: 40 },
   },
 }, {
   timestamps: true
@@ -103,9 +133,12 @@ userSchema.virtual('fullName').get(function() {
 userSchema.set('toJSON', {
   virtuals: true,
   transform: function(doc, ret) {
+    ret.hasPassword = !!ret.password;
     delete ret.password;
     delete ret.resetPasswordToken;
     delete ret.resetPasswordExpire;
+    delete ret.otp;
+    delete ret.otpExpire;
     return ret;
   }
 });

@@ -13,6 +13,8 @@ const userVendorAccessSchema = new mongoose.Schema({
   isAllowed: { type: Boolean, default: true },
   // Weight-based rate tiers — if empty, falls back to vendor.vendorRate
   rateTiers: [rateTierSchema],
+  // ShipLabel multi-series vendors: which series this user may pick. Empty = all allowed.
+  allowedShiplabelSeries: { type: [String], default: [] },
 }, { timestamps: true });
 
 // One record per user + vendor + carrier combination
