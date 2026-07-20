@@ -121,10 +121,13 @@ app.use(cors({
 }));
 
 // ── Rate limiting ─────────────────────────────────────────────
-// Global limiter for all routes
+// Global limiter for all routes.
+// Raised from 100 — with Command Center, User Stats, Bulk Access, etc. now
+// firing several requests per page, normal navigation was tripping the old
+// limit well within 15 minutes.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
+  max: process.env.NODE_ENV === 'production' ? 400 : 1000,
   message: { message: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
