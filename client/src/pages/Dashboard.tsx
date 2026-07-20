@@ -571,7 +571,6 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
   });
 
   const tsTotal        = tsCounts ? Object.values(tsCounts).reduce((s, v) => s + v, 0) : 0;
-  const tsDelivered    = tsCounts?.delivered ?? 0;
   const tsNotScanned   = tsCounts?.not_scanned_yet ?? 0;
   const tsScanned      = tsTotal - tsNotScanned;
   const scanningRate   = tsTotal > 0 ? Math.round((tsScanned / tsTotal) * 100) : 0;

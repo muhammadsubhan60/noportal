@@ -32,8 +32,6 @@ import {
   LightBulbIcon,
   CommandLineIcon,
   ExclamationTriangleIcon,
-  PuzzlePieceIcon,
-  ShoppingBagIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
 
