@@ -40,9 +40,9 @@ const ManifestHistory: React.FC = () => {
       if (statusF)  params.status  = statusF;
       if (carrierF) params.carrier = carrierF;
       const { data } = await axios.get(`${API}/manifest`, { headers: authH, params });
-      setJobs(data.jobs);
-      setPages(data.pages);
-      setTotal(data.total);
+      setJobs(data?.jobs ?? []);
+      setPages(data?.pages ?? 1);
+      setTotal(data?.total ?? 0);
     } catch { /* ignore */ }
     setLoading(false);
   }, [token, page, statusF, carrierF]); // eslint-disable-line react-hooks/exhaustive-deps

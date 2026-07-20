@@ -323,7 +323,7 @@ const Suggestions: React.FC = () => {
   const fetchAll = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/suggestions`, { headers: { Authorization: `Bearer ${token}` } });
-      setSuggestions(res.data.suggestions);
+      setSuggestions(res.data?.suggestions ?? []);
     } catch {}
     setLoading(false);
   }, [token]);

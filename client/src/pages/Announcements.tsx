@@ -340,7 +340,7 @@ const Announcements: React.FC = () => {
       const url = isAdmin ? `${API}/announcements/all` : `${API}/announcements`;
       const token = localStorage.getItem('token');
       const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
-      setItems(res.data.announcements);
+      setItems(res.data?.announcements ?? []);
     } catch (err) {
       console.error(err);
     } finally {
