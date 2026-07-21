@@ -137,6 +137,20 @@ axios.interceptors.request.use(
       config.url = config.url.replace(/^http:\/\/localhost:5001\/api/, '/api');
     }
 
+    // Many pages build their own `${API}/...` URL using the same '/api' fallback
+    // this file uses for axios.defaults.baseURL. When both resolve to the relative
+    // '/api' (i.e. REACT_APP_API_URL isn't set), axios prepends baseURL to that
+    // already-prefixed relative URL, producing '/api/api/...' — which matches no
+    // route and silently falls through to the SPA's index.html. Strip the duplicate.
+    if (
+      typeof config.url === 'string' &&
+      typeof axios.defaults.baseURL === 'string' &&
+      axios.defaults.baseURL.endsWith('/api') &&
+      config.url.startsWith('/api/')
+    ) {
+      config.url = config.url.slice(4);
+    }
+
     // Never overwrite vendor-portal requests — they carry their own token
     const isVendorRequest = config.url?.includes('/vendor-portal/');
     if (!isVendorRequest) {
