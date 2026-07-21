@@ -153,6 +153,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Never cache API responses ──────────────────────────────────
+// These are authenticated, per-user, frequently-changing JSON endpoints.
+// Express generates an ETag for every response by default, which makes them
+// conditionally-cacheable — a browser can revalidate with If-None-Match and
+// get served a stale locally-cached body via a 304. Static assets (JS/CSS/
+// images) are unaffected since this only applies under /api.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // ── Routes ────────────────────────────────────────────────────
 // Auth routes get the stricter per-endpoint rate limiter
 app.use('/api/auth',         authLimiter, authRoutes);
