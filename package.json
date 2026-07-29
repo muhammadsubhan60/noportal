@@ -1,6 +1,6 @@
 {
   "name": "usps-label-portal",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A streamlined USPS label management portal for admins, resellers, and users",
   "main": "server/index.js",
   "scripts": {
