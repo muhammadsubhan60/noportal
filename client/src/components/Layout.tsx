@@ -3,7 +3,6 @@ import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 import ThemeToggle from './ThemeToggle';
-import BrandMonogram from './BrandMonogram';
 import {
   HomeIcon,
   UserGroupIcon,
@@ -33,6 +32,7 @@ import {
   CommandLineIcon,
   ExclamationTriangleIcon,
   UsersIcon,
+  PhotoIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Announcement types ────────────────────────────────────────────────────────
@@ -510,8 +510,17 @@ const Layout: React.FC = () => {
                   alt=""
                   style={{ width: 18, height: 18, objectFit: 'contain', borderRadius: 4 }}
                 />
-              ) : hasBranding ? (
-                <BrandMonogram size={18} color="#0A0F1F" strokeWidth={2.2} />
+              ) : branding.orgName ? (
+                // Name set but no logo yet — show an initial badge, never the
+                // platform's own mark (that would look like branding never changed).
+                <div style={{
+                  width: 18, height: 18, borderRadius: 4,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
+                  color: '#fff', fontSize: 10, fontWeight: 800,
+                }}>
+                  {branding.orgName.trim().charAt(0).toUpperCase()}
+                </div>
               ) : (
                 <SparklesIcon style={{ width: 16, height: 16, color: '#94a3b8' }} />
               )}
@@ -881,7 +890,7 @@ const Layout: React.FC = () => {
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 ) : (
-                  <BrandMonogram size={22} color="#94a3b8" strokeWidth={2} />
+                  <PhotoIcon style={{ width: 24, height: 24, color: '#94a3b8' }} />
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
