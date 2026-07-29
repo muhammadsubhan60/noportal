@@ -7,12 +7,6 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import VendorLayout from './components/VendorLayout';
 import Login from './pages/Login';
-import Signup from './pages/Signup';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import LandingProxy from './pages/LandingProxy';
-import BlogIndex from './pages/BlogIndex';
-import BlogPost from './pages/BlogPost';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import UserManagement from './pages/UserManagement';
@@ -78,9 +72,6 @@ function App() {
               <Routes>
                 {/* Public routes */}
                 <Route path="/login"  element={<Login />} />
-                <Route path="/signup" element={<Signup />} />
-                <Route path="/forgot-password" element={<ForgotPassword />} />
-                <Route path="/reset-password"  element={<ResetPassword />} />
 
                 {/* ── Vendor Portal (completely separate, neutral branding) ── */}
                 <Route path="/vendor-portal/login" element={<VendorLogin />} />
@@ -91,10 +82,8 @@ function App() {
                   <Route path="earnings"  element={<VendorEarnings />} />
                 </Route>
 
-                {/* Public home page (keep URL as /) */}
-                <Route path="/" element={<LandingProxy />} />
-                <Route path="/blog" element={<BlogIndex />} />
-                <Route path="/blog/:slug" element={<BlogPost />} />
+                {/* No public landing page — send root straight to login */}
+                <Route path="/" element={<Navigate to="/login" replace />} />
 
                 {/* ── Command Center (admin, or reseller with ccAccess — own layout) ── */}
                 <Route path="/command-center" element={<CCAllowed><CCLayout /></CCAllowed>}>

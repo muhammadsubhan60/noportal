@@ -29,6 +29,20 @@ interface ModalState {
   account: Account | null;
 }
 
+interface ApiCredentialStatus {
+  provider: 'shiplabel' | 'labelcrow';
+  configured: boolean;
+  source: 'database' | 'env' | 'none';
+  last4: string | null;
+  testedAt: string | null;
+  testStatus: 'success' | 'failed' | null;
+}
+
+const API_KEY_PROVIDERS: { id: 'shiplabel' | 'labelcrow'; title: string; envVar: string }[] = [
+  { id: 'shiplabel', title: 'ShipLabel.net', envVar: 'SHIPLABEL_API_KEY' },
+  { id: 'labelcrow', title: 'Label Crow',    envVar: 'LABELCROW_API_KEY' },
+];
+
 const emptyForm = { name: '', email: '', password: '' };
 
 export default function Settings() {
@@ -45,6 +59,17 @@ export default function Settings() {
   const [testMsg, setTestMsg]     = useState<{ id: string; ok: boolean; msg: string } | null>(null);
   const [actionMsg, setActionMsg] = useState('');
 
+  // ── API key (ShipLabel / Label Crow) state ──────────────────────────────────
+  const [apiCredentials, setApiCredentials] = useState<ApiCredentialStatus[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(true);
+  const [keyModal, setKeyModal]   = useState<{ open: boolean; provider: 'shiplabel' | 'labelcrow' | null }>({ open: false, provider: null });
+  const [keyForm, setKeyForm]     = useState('');
+  const [keyFormError, setKeyFormError] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
+  const [testingKey, setTestingKey]   = useState<string | null>(null);
+  const [removingKey, setRemovingKey] = useState<string | null>(null);
+  const [keyTestMsg, setKeyTestMsg]   = useState<{ provider: string; ok: boolean; msg: string } | null>(null);
+
   const authHeader = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   const fetchAccounts = useCallback(async () => {
@@ -60,6 +85,20 @@ export default function Settings() {
   }, [authHeader]);
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
+
+  const fetchApiCredentials = useCallback(async () => {
+    setApiKeysLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/api-credentials`, { headers: authHeader() });
+      setApiCredentials(res.data.credentials || []);
+    } catch {
+      setApiCredentials([]);
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }, [authHeader]);
+
+  useEffect(() => { fetchApiCredentials(); }, [fetchApiCredentials]);
 
   // ── Modal helpers ─────────────────────────────────────────────────────────
   const openAdd = () => {
@@ -152,6 +191,68 @@ export default function Settings() {
       setActionMsg(err.response?.data?.message || 'Failed to delete.');
     } finally {
       setDeleting(null);
+    }
+  };
+
+  // ── API key modal helpers ────────────────────────────────────────────────
+  const openKeyModal = (provider: 'shiplabel' | 'labelcrow') => {
+    setKeyForm('');
+    setKeyFormError('');
+    setKeyModal({ open: true, provider });
+  };
+
+  const closeKeyModal = () => setKeyModal({ open: false, provider: null });
+
+  const handleSaveKey = async () => {
+    if (!keyModal.provider) return;
+    setKeyFormError('');
+    if (!keyForm.trim()) {
+      setKeyFormError('API key is required.');
+      return;
+    }
+
+    setSavingKey(true);
+    try {
+      await axios.put(
+        `${API_BASE}/api-credentials/${keyModal.provider}`,
+        { apiKey: keyForm.trim() },
+        { headers: authHeader() }
+      );
+      setActionMsg('API key saved.');
+      closeKeyModal();
+      fetchApiCredentials();
+    } catch (err: any) {
+      setKeyFormError(err.response?.data?.message || 'Failed to save API key.');
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  const handleTestApiKey = async (provider: string) => {
+    setTestingKey(provider);
+    setKeyTestMsg(null);
+    try {
+      const res = await axios.post(`${API_BASE}/api-credentials/${provider}/test`, {}, { headers: authHeader() });
+      setKeyTestMsg({ provider, ok: true, msg: res.data.message || 'Connection successful' });
+    } catch (err: any) {
+      setKeyTestMsg({ provider, ok: false, msg: err.response?.data?.message || 'Connection failed' });
+    } finally {
+      setTestingKey(null);
+      fetchApiCredentials();
+    }
+  };
+
+  const handleRemoveApiKey = async (provider: string) => {
+    if (!window.confirm('Remove this API key? Label generation for this provider will fail unless an environment variable fallback is set.')) return;
+    setRemovingKey(provider);
+    try {
+      await axios.delete(`${API_BASE}/api-credentials/${provider}`, { headers: authHeader() });
+      setActionMsg('API key removed.');
+      fetchApiCredentials();
+    } catch (err: any) {
+      setActionMsg(err.response?.data?.message || 'Failed to remove API key.');
+    } finally {
+      setRemovingKey(null);
     }
   };
 
@@ -400,6 +501,129 @@ export default function Settings() {
         )}
       </div>
 
+      {/* ── ShipLabel / Label Crow API Keys card ───────────────────────────── */}
+      <div style={{ ...card, marginTop: 24 }}>
+
+        <div style={{
+          padding: '1.1rem 1.4rem',
+          borderBottom: '1px solid var(--navy-100, #e8edf5)',
+        }}>
+          <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--navy-900)' }}>Label Provider API Keys</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--navy-400)', marginTop: 2 }}>
+            Add or update keys here instead of editing environment variables. Stored keys are encrypted at rest.
+          </div>
+        </div>
+
+        {apiKeysLoading ? (
+          <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--navy-300)', fontSize: '0.85rem' }}>
+            Loading…
+          </div>
+        ) : (
+          <div>
+            {API_KEY_PROVIDERS.map((p, i) => {
+              const status         = apiCredentials.find(c => c.provider === p.id) || null;
+              const isTestingThis  = testingKey === p.id;
+              const isRemovingThis = removingKey === p.id;
+              const myTestMsg      = keyTestMsg?.provider === p.id ? keyTestMsg : null;
+              const configured     = !!status?.configured;
+              const inDb           = status?.source === 'database';
+
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    padding: '1rem 1.4rem',
+                    borderBottom: i < API_KEY_PROVIDERS.length - 1 ? '1px solid var(--navy-50, #f8fafc)' : 'none',
+                    display: 'flex', alignItems: 'center', gap: 16,
+                  }}
+                >
+                  {/* Configured indicator */}
+                  <div style={{
+                    width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                    background: configured ? '#059669' : 'var(--navy-200, #cbd5e1)',
+                    boxShadow: configured ? '0 0 0 3px rgba(5,150,105,0.18)' : 'none',
+                  }} />
+
+                  {/* Info */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--navy-800)' }}>{p.title}</span>
+                      {status?.testStatus === 'success' && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.72rem', color: '#059669', fontWeight: 600 }}>
+                          <CheckCircleIcon style={{ width: 13, height: 13 }} /> Verified
+                        </span>
+                      )}
+                      {status?.testStatus === 'failed' && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.72rem', color: '#DC2626', fontWeight: 600 }}>
+                          <XCircleIcon style={{ width: 13, height: 13 }} /> Failed
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--navy-400)', marginTop: 2 }}>
+                      {inDb
+                        ? `Key ending in •••• ${status?.last4}`
+                        : status?.source === 'env'
+                          ? <>Using <code>{p.envVar}</code> from environment variables</>
+                          : 'Not configured'}
+                    </div>
+                    {status?.testedAt && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--navy-300)', marginTop: 1 }}>
+                        Last tested: {new Date(status.testedAt).toLocaleString()}
+                      </div>
+                    )}
+                    {myTestMsg && (
+                      <div style={{
+                        marginTop: 6, padding: '5px 10px', borderRadius: 7, display: 'inline-flex',
+                        alignItems: 'center', gap: 5, fontSize: '0.75rem', fontWeight: 600,
+                        background: myTestMsg.ok ? '#F0FDF4' : '#FFF5F5',
+                        color: myTestMsg.ok ? '#059669' : '#DC2626',
+                        border: `1px solid ${myTestMsg.ok ? '#6EE7B7' : '#FCA5A5'}`,
+                      }}>
+                        {myTestMsg.ok
+                          ? <CheckCircleIcon style={{ width: 13, height: 13 }} />
+                          : <XCircleIcon style={{ width: 13, height: 13 }} />
+                        }
+                        {myTestMsg.msg}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <button
+                      style={btnGhost}
+                      onClick={() => handleTestApiKey(p.id)}
+                      disabled={isTestingThis || !configured}
+                      title="Test connection"
+                    >
+                      <ArrowPathIcon style={{ width: 13, height: 13, animation: isTestingThis ? 'spin 1s linear infinite' : 'none' }} />
+                      {isTestingThis ? 'Testing…' : 'Test'}
+                    </button>
+
+                    <button style={btnGhost} onClick={() => openKeyModal(p.id)} title={inDb ? 'Replace key' : 'Add key'}>
+                      <PencilIcon style={{ width: 13, height: 13 }} />
+                      {inDb ? 'Replace' : 'Add Key'}
+                    </button>
+
+                    {inDb && (
+                      <button
+                        style={btnDanger}
+                        onClick={() => handleRemoveApiKey(p.id)}
+                        disabled={isRemovingThis}
+                        title="Remove"
+                      >
+                        <TrashIcon style={{ width: 13, height: 13 }} />
+                        {isRemovingThis ? '…' : 'Remove'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* ── Add / Edit Modal ──────────────────────────────────────────────── */}
       {modal.open && (
         <div style={{
@@ -476,6 +700,66 @@ export default function Settings() {
               <button style={btnGhost} onClick={closeModal} disabled={saving}>Cancel</button>
               <button style={btnPrimary} onClick={handleSave} disabled={saving}>
                 {saving ? 'Saving…' : modal.mode === 'add' ? 'Add Account' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── API Key Modal ─────────────────────────────────────────────────── */}
+      {keyModal.open && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '1rem',
+        }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeKeyModal(); }}
+        >
+          <div style={{
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 440,
+            boxShadow: '0 24px 64px rgba(0,0,0,0.2)',
+            padding: '1.6rem',
+          }}>
+            {/* Modal header */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--navy-900)' }}>
+                {API_KEY_PROVIDERS.find(p => p.id === keyModal.provider)?.title} API Key
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--navy-400)', marginTop: 3 }}>
+                The key is encrypted before storage. Use Test after saving to verify it works.
+              </div>
+            </div>
+
+            {/* Field */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={labelStyle}>API Key</label>
+                <input
+                  style={inputStyle}
+                  type="password"
+                  placeholder="Paste API key here"
+                  value={keyForm}
+                  onChange={e => setKeyForm(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              {keyFormError && (
+                <div style={{
+                  padding: '8px 12px', borderRadius: 8, background: '#FFF5F5',
+                  border: '1px solid #FCA5A5', color: '#DC2626', fontSize: '0.78rem', fontWeight: 600,
+                }}>
+                  {keyFormError}
+                </div>
+              )}
+            </div>
+
+            {/* Modal actions */}
+            <div style={{ display: 'flex', gap: 10, marginTop: 22, justifyContent: 'flex-end' }}>
+              <button style={btnGhost} onClick={closeKeyModal} disabled={savingKey}>Cancel</button>
+              <button style={btnPrimary} onClick={handleSaveKey} disabled={savingKey}>
+                {savingKey ? 'Saving…' : 'Save Key'}
               </button>
             </div>
           </div>

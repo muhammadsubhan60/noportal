@@ -61,6 +61,11 @@ const LAST_SEEN_KEY = 'sh_announcements_last_seen';
 const API_BASE = process.env.REACT_APP_API_URL
   || (window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : '/api');
 
+// <img src> requests go straight to the API origin, not through axios, so a
+// server-relative path like "/api/branding/logo/x.png" needs the origin prefixed.
+const API_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+const toAbsoluteUrl = (p: string) => (p.startsWith('http') ? p : `${API_ORIGIN}${p}`);
+
 interface NavItem {
   name: string;
   href: string;
@@ -102,6 +107,67 @@ const Layout: React.FC = () => {
   const navigate         = useNavigate();
   const [balance, setBalance] = useState<number | null>(null);
   const [navCounts, setNavCounts] = useState<{ users?: number; manifestsUnderReview?: number; labelsToday?: number; clientCount?: number }>({});
+  const [branding, setBranding] = useState<{ orgName: string; logoUrl: string | null }>({ orgName: '', logoUrl: null });
+  const [brandModalOpen, setBrandModalOpen] = useState(false);
+  const [brandForm, setBrandForm] = useState<{ orgName: string; logoFile: File | null; logoPreview: string | null }>({ orgName: '', logoFile: null, logoPreview: null });
+  const [savingBrand, setSavingBrand]     = useState(false);
+  const [removingBrandLogo, setRemovingBrandLogo] = useState(false);
+  const [brandError, setBrandError]       = useState('');
+  const hasBranding = !!(branding.orgName || branding.logoUrl);
+
+  // Fetch this user's own branding (name + logo shown in their sidebar)
+  useEffect(() => {
+    if (!user) return;
+    const token = localStorage.getItem('token');
+    axios.get(`${API_BASE}/branding`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => setBranding({ orgName: res.data?.orgName || '', logoUrl: res.data?.logoUrl || null }))
+      .catch(() => {});
+  }, [user]);
+
+  const openBrandModal = () => {
+    setBrandForm({ orgName: branding.orgName, logoFile: null, logoPreview: null });
+    setBrandError('');
+    setBrandModalOpen(true);
+  };
+  const closeBrandModal = () => setBrandModalOpen(false);
+
+  const handleBrandLogoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setBrandForm(f => ({ ...f, logoFile: file, logoPreview: file ? URL.createObjectURL(file) : f.logoPreview }));
+  };
+
+  const handleSaveBrand = async () => {
+    setSavingBrand(true);
+    setBrandError('');
+    try {
+      const token = localStorage.getItem('token');
+      const fd = new FormData();
+      fd.append('orgName', brandForm.orgName.trim());
+      if (brandForm.logoFile) fd.append('logo', brandForm.logoFile);
+      const res = await axios.put(`${API_BASE}/branding`, fd, { headers: { Authorization: `Bearer ${token}` } });
+      setBranding({ orgName: res.data?.orgName || '', logoUrl: res.data?.logoUrl || null });
+      setBrandModalOpen(false);
+    } catch (err: any) {
+      setBrandError(err.response?.data?.message || 'Failed to save branding.');
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
+  const handleRemoveBrandLogo = async () => {
+    setRemovingBrandLogo(true);
+    setBrandError('');
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.delete(`${API_BASE}/branding/logo`, { headers: { Authorization: `Bearer ${token}` } });
+      setBranding({ orgName: res.data?.orgName || '', logoUrl: res.data?.logoUrl || null });
+      setBrandForm(f => ({ ...f, logoFile: null, logoPreview: null }));
+    } catch (err: any) {
+      setBrandError(err.response?.data?.message || 'Failed to remove logo.');
+    } finally {
+      setRemovingBrandLogo(false);
+    }
+  };
 
   // Fetch balance
   useEffect(() => {
@@ -426,17 +492,46 @@ const Layout: React.FC = () => {
 
         {/* Logo / brand */}
         <div className={`sidebar-logo${collapsed ? ' sidebar-logo-collapsed' : ''}`}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 10, overflow: 'hidden', flex: 1, minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={openBrandModal}
+            title={hasBranding ? 'Edit your branding' : 'Add your branding'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: collapsed ? 0 : 10,
+              overflow: 'hidden', flex: 1, minWidth: 0,
+              background: 'none', border: 'none', padding: 0, margin: 0,
+              cursor: 'pointer', textAlign: 'left', font: 'inherit',
+            }}
+          >
             <div className="sidebar-logo-icon">
-              <BrandMonogram size={18} color="#0A0F1F" strokeWidth={2.2} />
+              {branding.logoUrl ? (
+                <img
+                  src={toAbsoluteUrl(branding.logoUrl)}
+                  alt=""
+                  style={{ width: 18, height: 18, objectFit: 'contain', borderRadius: 4 }}
+                />
+              ) : hasBranding ? (
+                <BrandMonogram size={18} color="#0A0F1F" strokeWidth={2.2} />
+              ) : (
+                <SparklesIcon style={{ width: 16, height: 16, color: '#94a3b8' }} />
+              )}
             </div>
             {!collapsed && (
               <div style={{ overflow: 'hidden', flex: 1 }}>
-                <div className="sidebar-brand-name">LABEL FLOW</div>
-                <div className="sidebar-brand-sub">Shipping Portal</div>
+                {hasBranding ? (
+                  <>
+                    <div className="sidebar-brand-name">{(branding.orgName || 'LABEL FLOW').toUpperCase()}</div>
+                    <div className="sidebar-brand-sub">Shipping Portal</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="sidebar-brand-name" style={{ color: 'rgba(255,255,255,0.6)' }}>+ Add branding</div>
+                    <div className="sidebar-brand-sub">Your name &amp; logo</div>
+                  </>
+                )}
               </div>
             )}
-          </div>
+          </button>
 
           {/* Collapse toggle — desktop only */}
           <button
@@ -744,6 +839,134 @@ const Layout: React.FC = () => {
             letterSpacing: '0.01em',
           }}>
             {tooltip.name}
+          </div>
+        </div>
+      )}
+
+      {/* ── Branding modal ──────────────────────────────────────────── */}
+      {brandModalOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '1rem',
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeBrandModal(); }}
+        >
+          <div style={{
+            background: 'var(--bg-card)', borderRadius: 16, width: '100%', maxWidth: 400,
+            boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: '1.6rem',
+          }}>
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--navy-900)' }}>
+                {hasBranding ? 'Edit Your Branding' : 'Add Your Branding'}
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--navy-400)', marginTop: 3 }}>
+                Your name and logo replace the default mark in your sidebar.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16 }}>
+              <div style={{
+                width: 60, height: 60, borderRadius: 12,
+                border: '1.5px dashed var(--navy-150, #e2e8f0)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                overflow: 'hidden', background: 'var(--navy-50, #f8fafc)', flexShrink: 0,
+              }}>
+                {brandForm.logoPreview || branding.logoUrl ? (
+                  <img
+                    src={brandForm.logoPreview || toAbsoluteUrl(branding.logoUrl!)}
+                    alt=""
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <BrandMonogram size={22} color="#94a3b8" strokeWidth={2} />
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                  padding: '6px 12px', borderRadius: 7,
+                  border: '1.5px solid var(--navy-150, #e2e8f0)', background: 'transparent',
+                  color: 'var(--navy-600, #475569)', fontSize: '0.78rem', fontWeight: 600,
+                }}>
+                  Upload logo
+                  <input
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.svg,.webp"
+                    onChange={handleBrandLogoPick}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                {branding.logoUrl && !brandForm.logoFile && (
+                  <button
+                    onClick={handleRemoveBrandLogo}
+                    disabled={removingBrandLogo}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: '#DC2626', fontSize: '0.75rem', fontWeight: 600, padding: 0, textAlign: 'left',
+                    }}
+                  >
+                    {removingBrandLogo ? 'Removing…' : 'Remove logo'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label style={{
+                display: 'block', fontSize: '0.72rem', fontWeight: 700,
+                color: 'var(--navy-500)', marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase',
+              }}>
+                Organization Name
+              </label>
+              <input
+                style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 8,
+                  border: '1.5px solid var(--navy-150, #e2e8f0)',
+                  fontSize: '0.85rem', color: 'var(--navy-800)', outline: 'none', boxSizing: 'border-box',
+                }}
+                placeholder="e.g. Acme Shipping Co."
+                maxLength={60}
+                value={brandForm.orgName}
+                onChange={e => setBrandForm(f => ({ ...f, orgName: e.target.value }))}
+                autoFocus
+              />
+            </div>
+
+            {brandError && (
+              <div style={{
+                marginTop: 12, padding: '8px 12px', borderRadius: 8, background: '#FFF5F5',
+                border: '1px solid #FCA5A5', color: '#DC2626', fontSize: '0.78rem', fontWeight: 600,
+              }}>
+                {brandError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+              <button
+                onClick={closeBrandModal}
+                disabled={savingBrand}
+                style={{
+                  padding: '8px 16px', borderRadius: 8,
+                  border: '1.5px solid var(--navy-150, #e2e8f0)', background: 'transparent',
+                  color: 'var(--navy-600, #475569)', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveBrand}
+                disabled={savingBrand}
+                style={{
+                  padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: 'var(--accent-600, #4f46e5)', color: '#fff', fontSize: '0.82rem', fontWeight: 700,
+                }}
+              >
+                {savingBrand ? 'Saving…' : 'Save'}
+              </button>
+            </div>
           </div>
         </div>
       )}

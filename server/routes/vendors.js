@@ -178,13 +178,12 @@ router.post('/import-from-labelcrow', authenticateToken, authorize('admin'), asy
     ]);
 
     // Build map: 'carrier:service_class' → Set<provider_key>
+    // API response is a flat array of { carrier, service_class, provider_key }
     const providerMap = new Map();
     for (const p of providersRaw) {
-      for (const sc of (p.service_classes || [])) {
-        const k = `${p.carrier}:${sc.service_class}`;
-        if (!providerMap.has(k)) providerMap.set(k, new Set());
-        for (const pk of (sc.provider_keys || [])) providerMap.get(k).add(pk);
-      }
+      const k = `${p.carrier}:${p.service_class}`;
+      if (!providerMap.has(k)) providerMap.set(k, new Set());
+      if (p.provider_key) providerMap.get(k).add(p.provider_key);
     }
 
     const created = [];

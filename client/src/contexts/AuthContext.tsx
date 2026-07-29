@@ -31,18 +31,9 @@ interface AuthState {
 
 interface AuthContextType extends AuthState {
   login: (email: string, password: string) => Promise<void>;
-  register: (userData: RegisterData) => Promise<void>;
   logout: () => void;
   clearError: () => void;
   updateUser: (userData: Partial<User>) => void;
-}
-
-interface RegisterData {
-  firstName: string;
-  lastName: string;
-  email: string;
-  password: string;
-  role?: 'admin' | 'reseller' | 'user';
 }
 
 // Action types
@@ -167,12 +158,12 @@ axios.interceptors.request.use(
 );
 
 // Add response interceptor to handle token expiration
-// Exclude auth endpoints — a 401 on login/register is just wrong credentials, not a session expiry
+// Exclude auth endpoints — a 401 on login is just wrong credentials, not a session expiry
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
     const url = error.config?.url || '';
-    const isAuthEndpoint    = url.includes('/auth/login') || url.includes('/auth/register');
+    const isAuthEndpoint    = url.includes('/auth/login');
     const isVendorEndpoint  = url.includes('/vendor-portal/');
     if (error.response?.status === 401 && !isAuthEndpoint && !isVendorEndpoint) {
       localStorage.removeItem('token');
@@ -235,26 +226,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Register function
-  const register = async (userData: RegisterData) => {
-    try {
-      dispatch({ type: 'AUTH_START' });
-      const response = await axios.post('/auth/register', userData);
-
-      const { token, user } = response.data;
-      localStorage.setItem('token', token);
-
-      dispatch({
-        type: 'AUTH_SUCCESS',
-        payload: { user, token },
-      });
-    } catch (error: any) {
-      const message = error.response?.data?.message || 'Registration failed';
-      dispatch({ type: 'AUTH_FAILURE', payload: message });
-      throw new Error(message);
-    }
-  };
-
   // Logout function
   const logout = () => {
     localStorage.removeItem('token');
@@ -274,7 +245,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const value: AuthContextType = {
     ...state,
     login,
-    register,
     logout,
     clearError,
     updateUser,

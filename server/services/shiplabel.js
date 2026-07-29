@@ -1,20 +1,31 @@
 /**
  * ShipLabel.net API Service
  * Base: https://shiplabel.net/api/v2
- * Auth: Authorization: Bearer <SHIPLABEL_API_KEY>
+ * Auth: Authorization: Bearer <api key>
+ * Key is read from the active ApiCredential in the DB (Settings page),
+ * falling back to the SHIPLABEL_API_KEY env var.
  */
 const https = require('https');
 
 const SL_HOST = 'shiplabel.net';
 
-const getKey = () => {
+async function getKey() {
+  try {
+    const ApiCredential = require('../models/ApiCredential');
+    const cred = await ApiCredential.findOne({ provider: 'shiplabel' });
+    if (cred) return cred.getApiKey();
+  } catch (_) {
+    // DB not ready yet or model not found — fall through to env var
+  }
+
   const k = process.env.SHIPLABEL_API_KEY;
-  if (!k) throw new Error('SHIPLABEL_API_KEY is not set in environment variables');
+  if (!k) throw new Error('No ShipLabel API key configured. Add one in Settings or set SHIPLABEL_API_KEY in .env');
   return k;
-};
+}
 
 // ── JSON request helper ────────────────────────────────────────
-function apiRequest(method, urlPath, data = null) {
+async function apiRequest(method, urlPath, data = null) {
+  const key = await getKey();
   return new Promise((resolve, reject) => {
     const body = data ? JSON.stringify(data) : null;
     const options = {
@@ -23,7 +34,7 @@ function apiRequest(method, urlPath, data = null) {
       path:     urlPath,
       method,
       headers: {
-        'Authorization': `Bearer ${getKey()}`,
+        'Authorization': `Bearer ${key}`,
         'Content-Type':  'application/json',
         'Accept':        'application/json',
         ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),

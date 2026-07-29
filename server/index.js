@@ -35,6 +35,8 @@ const cashbookRoutes           = require('./routes/cashbook');
 const equityPartnerRoutes      = require('./routes/equityPartners');
 const financialDashboardRoutes = require('./routes/financialDashboard');
 const shippershubAccountRoutes      = require('./routes/shippershubAccounts');
+const apiCredentialRoutes           = require('./routes/apiCredentials');
+const brandingRoutes                = require('./routes/branding');
 const leaderboardRoutes             = require('./routes/leaderboard');
 const suggestionRoutes              = require('./routes/suggestions');
 const errorLogRoutes                = require('./routes/errorLogs');
@@ -78,8 +80,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // 'unsafe-inline' required for landing.html inline scripts (rate ticker,
-      // savings calc, iframe-nav intercept) and the Google Analytics dataLayer snippet.
+      // 'unsafe-inline' required for the Google Analytics dataLayer snippet in index.html.
       scriptSrc: [
         "'self'",
         "'unsafe-inline'",
@@ -191,6 +192,8 @@ app.use('/api/cashbook',              cashbookRoutes);
 app.use('/api/equity-partners',       equityPartnerRoutes);
 app.use('/api/financial-dashboard',   financialDashboardRoutes);
 app.use('/api/shippershub-accounts',  shippershubAccountRoutes);
+app.use('/api/api-credentials',       apiCredentialRoutes);
+app.use('/api/branding',              brandingRoutes);
 app.use('/api/leaderboard',           leaderboardRoutes);
 app.use('/api/suggestions',           suggestionRoutes);
 app.use('/api/error-logs',            errorLogRoutes);

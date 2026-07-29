@@ -1474,7 +1474,7 @@ router.patch('/:id/void', authenticateToken, async (req, res) => {
 // Accepts ?inline=1 to open in browser instead of downloading.
 router.get('/:id/pdf', authenticateToken, async (req, res) => {
   try {
-    const label = await Label.findById(req.params.id).select('user pdfUrl awsPath trackingId');
+    const label = await Label.findById(req.params.id).select('user pdfUrl awsPath trackingId to_name');
     if (!label) return res.status(404).json({ message: 'Label not found' });
 
     // Only the label owner or admin can access
@@ -1485,15 +1485,35 @@ router.get('/:id/pdf', authenticateToken, async (req, res) => {
     const src = label.pdfUrl || label.awsPath;
     if (!src) return res.status(404).json({ message: 'No PDF available for this label' });
 
-    const safeName  = `label-${label.trackingId || label._id}.pdf`;
+    // Filename: "<recipient name>-<tracking number>.pdf" — strip anything unsafe
+    // for a filename / Content-Disposition header (recipient name is free-text user input).
+    const namePart = (label.to_name || '').replace(/[^a-zA-Z0-9 _-]/g, '').trim().replace(/\s+/g, '-').slice(0, 60);
+    const safeName = `${namePart ? namePart + '-' : ''}${label.trackingId || label._id}.pdf`;
     const inline    = req.query.inline === '1';
     const disp      = inline ? 'inline' : 'attachment';
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `${disp}; filename="${safeName}"`);
 
-    // External URL (S3 or ShippersHub CDN) — fetch server-side and pipe back
+    // External URL (S3, ShippersHub CDN, or Label Crow) — fetch server-side and pipe back
     if (src.startsWith('http://') || src.startsWith('https://')) {
+      const hostname = (() => { try { return new URL(src).hostname; } catch { return ''; } })();
+
+      // Label Crow's download endpoint requires the Bearer API key — unlike
+      // public S3/CDN URLs, a plain unauthenticated fetch gets a 401.
+      if (hostname === 'labelcrow.com') {
+        try {
+          const labelcrow = require('../services/labelcrow');
+          const { buffer, statusCode } = await labelcrow.downloadLabelPdf(src);
+          if (statusCode !== 200) {
+            return res.status(502).json({ message: 'Could not fetch PDF from Label Crow' });
+          }
+          return res.end(buffer);
+        } catch (err) {
+          return res.status(502).json({ message: 'Could not fetch PDF from Label Crow' });
+        }
+      }
+
       const https = require('https');
       const http  = require('http');
       const mod   = src.startsWith('https') ? https : http;

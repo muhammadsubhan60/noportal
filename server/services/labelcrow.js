@@ -1,20 +1,31 @@
 /**
  * Label Crow API Service
  * Base: https://labelcrow.com/api/v1
- * Auth: Authorization: Bearer <LABELCROW_API_KEY>
+ * Auth: Authorization: Bearer <api key>
+ * Key is read from the active ApiCredential in the DB (Settings page),
+ * falling back to the LABELCROW_API_KEY env var.
  */
 const https = require('https');
 
 const LC_HOST = 'labelcrow.com';
 
-const getKey = () => {
+async function getKey() {
+  try {
+    const ApiCredential = require('../models/ApiCredential');
+    const cred = await ApiCredential.findOne({ provider: 'labelcrow' });
+    if (cred) return cred.getApiKey();
+  } catch (_) {
+    // DB not ready yet or model not found — fall through to env var
+  }
+
   const k = process.env.LABELCROW_API_KEY;
-  if (!k) throw new Error('LABELCROW_API_KEY is not set in environment variables');
+  if (!k) throw new Error('No Label Crow API key configured. Add one in Settings or set LABELCROW_API_KEY in .env');
   return k;
-};
+}
 
 // ── JSON request helper ────────────────────────────────────────
-function apiRequest(method, urlPath, data = null) {
+async function apiRequest(method, urlPath, data = null) {
+  const key = await getKey();
   return new Promise((resolve, reject) => {
     const body = data ? JSON.stringify(data) : null;
     const options = {
@@ -23,7 +34,7 @@ function apiRequest(method, urlPath, data = null) {
       path:     urlPath,
       method,
       headers: {
-        'Authorization': `Bearer ${getKey()}`,
+        'Authorization': `Bearer ${key}`,
         'Content-Type':  'application/json',
         ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
       },
@@ -55,14 +66,15 @@ function apiRequest(method, urlPath, data = null) {
 }
 
 // ── Binary request helper (ZIP download) ──────────────────────
-function apiBinaryRequest(urlPath) {
+async function apiBinaryRequest(urlPath) {
+  const key = await getKey();
   return new Promise((resolve, reject) => {
     const options = {
       hostname: LC_HOST,
       port:     443,
       path:     urlPath,
       method:   'GET',
-      headers:  { 'Authorization': `Bearer ${getKey()}` },
+      headers:  { 'Authorization': `Bearer ${key}` },
     };
 
     const req = https.request(options, (res) => {
@@ -145,6 +157,17 @@ async function downloadOrderZip(orderId) {
 }
 
 /**
+ * Download a single label PDF from Label Crow's authenticated download endpoint.
+ * `fullUrl` is the absolute URL stored on the Label record (label.pdfUrl) —
+ * this endpoint requires the Bearer API key, unlike public S3/CDN label URLs.
+ * Returns { buffer, statusCode, contentType }
+ */
+async function downloadLabelPdf(fullUrl) {
+  const { pathname, search } = new URL(fullUrl);
+  return apiBinaryRequest(pathname + search);
+}
+
+/**
  * Get all label series available on this account.
  * Returns array of { id, series_code, display_name, carrier, service_class, price_brackets }
  */
@@ -155,7 +178,7 @@ async function getSeries() {
 
 /**
  * Get all providers available on this account.
- * Returns array of { carrier, service_classes: [{ service_class, provider_keys: [] }] }
+ * Returns flat array of { carrier, service_class, provider_key }
  */
 async function getProviders() {
   const res = await apiRequest('GET', '/api/v1/account/providers');
@@ -201,4 +224,4 @@ async function createSingleLabel({ seriesId, carrier, serviceClass, providerKey,
   };
 }
 
-module.exports = { createSingleLabel, submitBulkJob, pollJob, getOrder, downloadOrderZip, getSeries, getProviders };
+module.exports = { createSingleLabel, submitBulkJob, pollJob, getOrder, downloadOrderZip, downloadLabelPdf, getSeries, getProviders };

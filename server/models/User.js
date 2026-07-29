@@ -48,8 +48,6 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date
   },
-  resetPasswordToken: String,
-  resetPasswordExpire: Date,
   emailVerified: { type: Boolean, default: true },
   otp: String,
   otpExpire: Date,
@@ -135,8 +133,6 @@ userSchema.set('toJSON', {
   transform: function(doc, ret) {
     ret.hasPassword = !!ret.password;
     delete ret.password;
-    delete ret.resetPasswordToken;
-    delete ret.resetPasswordExpire;
     delete ret.otp;
     delete ret.otpExpire;
     return ret;
