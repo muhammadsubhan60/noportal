@@ -33,10 +33,10 @@ const VendorLayout: React.FC = () => {
   const handleLogout = () => { logout(); navigate('/vendor-portal/login'); };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#0f172a' }}>
+    <div className="vendor-shell" style={{ display: 'flex', minHeight: '100vh', background: '#0f172a' }}>
 
       {/* Sidebar — neutral branding (no Label Flow name) */}
-      <aside style={{
+      <aside className="vendor-sidebar" style={{
         width: 220, background: '#0f172a', borderRight: '1px solid rgba(255,255,255,0.07)',
         display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, bottom: 0, left: 0,
       }}>
@@ -59,7 +59,7 @@ const VendorLayout: React.FC = () => {
         </div>
 
         {/* Nav */}
-        <nav style={{ flex: 1, padding: '8px 0' }}>
+        <nav className="vendor-nav" style={{ flex: 1, padding: '8px 0' }}>
           {nav.map(item => (
             <Link key={item.name} to={item.href} style={{
               display: 'flex', alignItems: 'center', gap: 9,
@@ -77,7 +77,7 @@ const VendorLayout: React.FC = () => {
         </nav>
 
         {/* Footer */}
-        <div style={{ padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="vendor-footer" style={{ padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <div style={{
               width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
@@ -106,7 +106,7 @@ const VendorLayout: React.FC = () => {
       </aside>
 
       {/* Main */}
-      <main style={{ marginLeft: 220, flex: 1, background: '#f1f5f9', minHeight: '100vh' }}>
+      <main className="vendor-main" style={{ marginLeft: 220, flex: 1, background: '#f1f5f9', minHeight: '100vh', minWidth: 0 }}>
         <Outlet />
       </main>
     </div>

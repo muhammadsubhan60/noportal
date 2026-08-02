@@ -4,7 +4,7 @@ const User    = require('../models/User');
 const Balance = require('../models/Balance');
 const Rate    = require('../models/Rate');
 const { authenticateToken, authorize } = require('../middleware/auth');
-const { validatePassword } = require('../utils/passwordPolicy');
+const { validatePin } = require('../utils/passwordPolicy');
 
 const router = express.Router();
 
@@ -74,7 +74,7 @@ router.post('/reseller/clients', authenticateToken, authorize('admin', 'reseller
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('password').custom(value => {
-    const err = validatePassword(value);
+    const err = validatePin(value);
     if (err) throw new Error(err);
     return true;
   }),
@@ -82,7 +82,8 @@ router.post('/reseller/clients', authenticateToken, authorize('admin', 'reseller
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+      const details = errors.array();
+      return res.status(400).json({ message: details[0].msg, errors: details });
     }
 
     const { firstName, lastName, email, password } = req.body;
@@ -160,7 +161,7 @@ router.post('/', authenticateToken, authorize('admin'), [
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('password').custom(value => {
-    const err = validatePassword(value);
+    const err = validatePin(value);
     if (err) throw new Error(err);
     return true;
   }),
@@ -169,7 +170,8 @@ router.post('/', authenticateToken, authorize('admin'), [
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+      const details = errors.array();
+      return res.status(400).json({ message: details[0].msg, errors: details });
     }
 
     const { firstName, lastName, email, password, role, source } = req.body;

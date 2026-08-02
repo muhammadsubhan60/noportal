@@ -413,7 +413,7 @@ const Layout: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: '100vh' }}>
+    <div className={`portal-shell portal-${user?.role || 'user'}`} style={{ minHeight: '100vh' }}>
 
       {/* ── Fixed full-width announcement bar ───────────────── */}
       {alertVisible && currentAlert && (() => {
