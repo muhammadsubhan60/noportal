@@ -625,10 +625,10 @@ const UserManagement: React.FC = () => {
                     </div>
                     {isCreating && (
                       <div>
-                        <label className="form-label">Password</label>
-                        <input type="password" required minLength={8} className="form-input" value={userForm.password}
-                          onChange={e => setUserForm({ ...userForm, password: e.target.value })} />
-                        <p style={{ fontSize: '0.72rem', color: 'var(--navy-400)', marginTop: 3 }}>Minimum 8 characters, including one special character</p>
+                        <label className="form-label">Login PIN</label>
+                        <input type="password" required inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} className="form-input" value={userForm.password}
+                          onChange={e => setUserForm({ ...userForm, password: e.target.value.replace(/\D/g, '').slice(0, 6) })} />
+                        <p style={{ fontSize: '0.72rem', color: 'var(--navy-400)', marginTop: 3 }}>Enter exactly 6 digits</p>
                       </div>
                     )}
                     <div>

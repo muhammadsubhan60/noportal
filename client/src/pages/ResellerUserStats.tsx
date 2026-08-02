@@ -90,7 +90,7 @@ function UserDrawer({ user, stats, periodLabel, onClose, onPhoneSave }: {
   return ReactDOM.createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.35)', zIndex: 1000, backdropFilter: 'blur(2px)' }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 340, background: 'var(--bg-card)', boxShadow: '-4px 0 32px rgba(15,23,42,0.18)', zIndex: 1001, display: 'flex', flexDirection: 'column', fontFamily: FONT }}>
+      <div className="responsive-side-sheet" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 340, background: 'var(--bg-card)', boxShadow: '-4px 0 32px rgba(15,23,42,0.18)', zIndex: 1001, display: 'flex', flexDirection: 'column', fontFamily: FONT }}>
         {/* Header */}
         <div style={{ padding: '1.1rem 1.3rem', borderBottom: '1px solid var(--navy-100)', display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 42, height: 42, borderRadius: '50%', background: AVATAR_GRAD, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.85rem', fontWeight: 700, flexShrink: 0 }}>
