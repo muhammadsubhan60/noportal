@@ -26,8 +26,58 @@ interface ApiVendor {
   shiplabelServiceId:    string | null;
   shiplabelLabelSeries:  string | null;
   shiplabelLabelFormat:  string | null;
+  shiplabelSeries?:      { series: string; format: string; name?: string }[];
   createdAt: string;
 }
+
+// ShipLabel "Custom Label (Series & Format)" catalog. The ShipLabel API
+// (/api/v2/services) only returns pre-packaged label products (2-3 of them), NOT
+// this catalog — it is rendered server-side into the <select>s on the ShipLabel
+// portal's custom-label page. Mirrored here verbatim from that page; update if
+// ShipLabel changes their lists.
+const SL_SERIES: { value: string; label: string }[] = [
+  { value: '9488', label: '9488' },
+  { value: '9501', label: '9501' },
+  { value: '9505', label: '9505' },
+  { value: '9559', label: '9559' },
+  { value: '92019', label: '92019' },
+  { value: '92020', label: '92020' },
+  { value: '92022', label: '92022' },
+  { value: '92612', label: '92612' },
+  { value: '93001', label: '93001' },
+  { value: '93020', label: '93020' },
+  { value: '93055', label: '93055' },
+  { value: '94001', label: '94001' },
+  { value: '95346', label: '95346' },
+  { value: '95701', label: '95701' },
+  { value: '9201990', label: '9201990' },
+  { value: '91028052', label: '91028052' },
+  { value: '94055589', label: '94055589' },
+  { value: '94055937', label: '94055937' },
+  { value: '930210623', label: '9302 (Manifest)' },
+  { value: '910280521368', label: '910280521368' },
+  { value: '930201062339', label: '930201 (Non Manifest)' },
+  { value: '930222083160', label: '930222 (Non Manifest)' },
+  { value: '930222083160501', label: '930222 (Manifest)' },
+  { value: '9234690208389319', label: '9234690208389319' },
+  { value: 'user_own_trackings', label: 'My Custom Series' },
+];
+
+const SL_FORMATS: { value: string; label: string }[] = [
+  { value: 'usps_priority_pro', label: 'USPS Priority Pro' },
+  { value: 'usps_priority_private', label: 'USPS Priority Private' },
+  { value: 'usps_priority_mail', label: 'USPS Priority Mail' },
+  { value: 'usps_priority_pitneyBow', label: 'USPS Priority Mail PitneyBow' },
+  { value: 'usps_priority_mail_commercial_easypost', label: 'USPS Priority Mail Commercial EasyPost' },
+  { value: 'usps_ground_api', label: 'USPS Ground API' },
+  { value: 'click_n_ship', label: 'Click-N-Ship' },
+  { value: 'usps_ground_pro', label: 'USPS Ground Pro' },
+  { value: 'usps_ground_advantage', label: 'USPS Ground Advantage' },
+  { value: 'usps_priority_mail_epostage', label: 'USPS Priority Mail ePostage' },
+  { value: 'usps_ground_advantage_atfm_epostage', label: 'USPS Ground Advantage ATFM ePostage' },
+];
+
+const slFormatLabel = (v: string) => SL_FORMATS.find(f => f.value === v)?.label || v;
 
 interface ManifestVendor {
   _id: string;
@@ -239,6 +289,7 @@ const VendorManagement: React.FC = () => {
   const [editApi,       setEditApi]       = useState<ApiVendor | null>(null);
   const [apiRate,       setApiRate]       = useState('');
   const [apiActive,     setApiActive]     = useState(true);
+  const [apiSeries,     setApiSeries]     = useState<{ series: string; format: string; name: string }[]>([]);
   const [apiSaving,     setApiSaving]     = useState(false);
   const [diagLoading,   setDiagLoading]   = useState(false);
   const [diagData,      setDiagData]      = useState<any[] | null>(null);
@@ -251,6 +302,11 @@ const VendorManagement: React.FC = () => {
   // API vendors (ShipLabel)
   const [slVendors,     setSlVendors]     = useState<ApiVendor[]>([]);
   const [slSyncing,     setSlSyncing]     = useState(false);
+  const [slCustomOpen,  setSlCustomOpen]  = useState(false);
+  const [slPickSeries,  setSlPickSeries]  = useState<string[]>([]);
+  const [slPickFormats, setSlPickFormats] = useState<string[]>([]);
+  const [slCustomRate,  setSlCustomRate]  = useState('');
+  const [slCustomSaving, setSlCustomSaving] = useState(false);
 
   // Manifest vendors
   const [vendors,       setVendors]       = useState<ManifestVendor[]>([]);
@@ -298,19 +354,33 @@ const VendorManagement: React.FC = () => {
     setEditApi(v);
     setApiRate(String(v.rate));
     setApiActive(v.isActive);
+    setApiSeries((v.shiplabelSeries || []).map(s => ({
+      series: s.series, format: s.format, name: s.name || '',
+    })));
   };
 
   const handleSaveApi = async () => {
     if (!editApi) return;
     setApiSaving(true);
     try {
-      await axios.put(`/vendors/${editApi._id}`, { rate: parseFloat(apiRate) || 0, isActive: apiActive });
+      const body: Record<string, unknown> = { rate: parseFloat(apiRate) || 0, isActive: apiActive };
+      if (editApi.source === 'shiplabel') {
+        body.shiplabelSeries = apiSeries
+          .map(s => ({ series: s.series.trim(), format: s.format.trim(), name: s.name.trim() }))
+          .filter(s => s.series && s.format);
+      }
+      await axios.put(`/vendors/${editApi._id}`, body);
       notify('Vendor updated');
       setEditApi(null);
       fetchApiVendors();
     } catch (err: any) { notify(err.response?.data?.message || 'Update failed', true); }
     finally { setApiSaving(false); }
   };
+
+  const addSeriesRow = () => setApiSeries(rows => [...rows, { series: SL_SERIES[0].value, format: SL_FORMATS[0].value, name: '' }]);
+  const updateSeriesRow = (i: number, patch: Partial<{ series: string; format: string; name: string }>) =>
+    setApiSeries(rows => rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const removeSeriesRow = (i: number) => setApiSeries(rows => rows.filter((_, idx) => idx !== i));
 
   const handleDeleteApi = async (v: ApiVendor) => {
     if (!window.confirm(`Delete "${v.name}"?`)) return;
@@ -349,6 +419,34 @@ const VendorManagement: React.FC = () => {
       fetchApiVendors();
     } catch (err: any) { notify(err.response?.data?.message || 'ShipLabel sync failed', true); }
     finally { setSlSyncing(false); }
+  };
+
+  const openSlCustom = () => {
+    setSlPickSeries([]);
+    setSlPickFormats([]);
+    setSlCustomRate('');
+    setSlCustomOpen(true);
+  };
+  const toggleSlSeries  = (v: string) => setSlPickSeries(xs => xs.includes(v) ? xs.filter(x => x !== v) : [...xs, v]);
+  const toggleSlFormat  = (v: string) => setSlPickFormats(xs => xs.includes(v) ? xs.filter(x => x !== v) : [...xs, v]);
+
+  const handleCreateCustomSlVendor = async () => {
+    if (!slPickSeries.length || !slPickFormats.length) {
+      notify('Pick at least one series and one format', true);
+      return;
+    }
+    setSlCustomSaving(true);
+    try {
+      const res = await axios.post('/vendors/shiplabel-custom', {
+        series: slPickSeries,
+        format: slPickFormats,
+        rate: parseFloat(slCustomRate) || 0,
+      });
+      notify(res.data.message || 'Custom series vendors created');
+      setSlCustomOpen(false);
+      fetchApiVendors();
+    } catch (err: any) { notify(err.response?.data?.message || 'Create failed', true); }
+    finally { setSlCustomSaving(false); }
   };
 
   const fetchVendors = async () => {
@@ -586,26 +684,41 @@ const VendorManagement: React.FC = () => {
               </div>
 
               {/* Active portal header: description + sync button */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1.25rem', background: portal.bg }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1.25rem', background: portal.bg, gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.78rem', color: portal.accent, fontWeight: 600 }}>{portal.desc}</span>
-                <button
-                  onClick={portal.onSync}
-                  disabled={portal.syncing}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                    padding: '6px 14px', borderRadius: 8, fontSize: '0.78rem', fontWeight: 700,
-                    border: `1.5px solid ${portal.accent}`,
-                    background: portal.syncing ? portal.bg : portal.accent,
-                    color: portal.syncing ? portal.accent : '#fff',
-                    cursor: portal.syncing ? 'not-allowed' : 'pointer',
-                    opacity: portal.syncing ? 0.75 : 1, transition: 'all 0.15s',
-                  }}
-                >
-                  {portal.syncing
-                    ? <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: `${portal.accent}40`, borderTopColor: portal.accent }} /> Syncing…</>
-                    : <><ArrowPathIcon style={{ width: 13, height: 13 }} /> {portal.syncLabel}</>
-                  }
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  {activePortal === 'shiplabel' && (
+                    <button
+                      onClick={openSlCustom}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                        padding: '6px 14px', borderRadius: 8, fontSize: '0.78rem', fontWeight: 700,
+                        border: `1.5px solid ${portal.accent}`, background: '#fff', color: portal.accent,
+                        cursor: 'pointer', transition: 'all 0.15s',
+                      }}
+                    >
+                      <PlusIcon style={{ width: 13, height: 13 }} /> Custom series vendor
+                    </button>
+                  )}
+                  <button
+                    onClick={portal.onSync}
+                    disabled={portal.syncing}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                      padding: '6px 14px', borderRadius: 8, fontSize: '0.78rem', fontWeight: 700,
+                      border: `1.5px solid ${portal.accent}`,
+                      background: portal.syncing ? portal.bg : portal.accent,
+                      color: portal.syncing ? portal.accent : '#fff',
+                      cursor: portal.syncing ? 'not-allowed' : 'pointer',
+                      opacity: portal.syncing ? 0.75 : 1, transition: 'all 0.15s',
+                    }}
+                  >
+                    {portal.syncing
+                      ? <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: `${portal.accent}40`, borderTopColor: portal.accent }} /> Syncing…</>
+                      : <><ArrowPathIcon style={{ width: 13, height: 13 }} /> {portal.syncLabel}</>
+                    }
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -787,6 +900,48 @@ const VendorManagement: React.FC = () => {
                       Active (users can generate labels with this vendor)
                     </label>
                   </div>
+
+                  {editApi.source === 'shiplabel' && (
+                    <div>
+                      <label className="form-label">Series &amp; Formats</label>
+                      <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: 'var(--navy-400)' }}>
+                        Each row is a selectable option users pick at label generation. Leave empty to use the vendor's
+                        built-in series. Series is the printed prefix (e.g. <code>9505</code>).
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
+                        {apiSeries.length === 0 && (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--navy-300)', padding: '0.25rem 0' }}>No series configured.</div>
+                        )}
+                        {apiSeries.map((row, i) => (
+                          <div key={i} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr 28px', gap: 6, alignItems: 'center' }}>
+                            <select className="form-input" value={row.series}
+                              onChange={e => updateSeriesRow(i, { series: e.target.value })} style={{ fontSize: '0.8rem' }}>
+                              {!SL_SERIES.some(s => s.value === row.series) && row.series && <option value={row.series}>{row.series}</option>}
+                              {SL_SERIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                            </select>
+                            <select className="form-input" value={row.format}
+                              onChange={e => updateSeriesRow(i, { format: e.target.value })} style={{ fontSize: '0.8rem' }}>
+                              {!SL_FORMATS.some(f => f.value === row.format) && row.format && <option value={row.format}>{row.format}</option>}
+                              {SL_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                            </select>
+                            <input className="form-input" placeholder="Label (optional)" value={row.name}
+                              onChange={e => updateSeriesRow(i, { name: e.target.value })} style={{ fontSize: '0.8rem' }} />
+                            <button type="button" onClick={() => removeSeriesRow(i)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--navy-400)', padding: 2 }}
+                              aria-label="Remove series">
+                              <TrashIcon style={{ width: 16, height: 16 }} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                        <button type="button" className="btn btn-ghost" onClick={addSeriesRow}
+                          style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>
+                          <PlusIcon style={{ width: 14, height: 14, marginRight: 4 }} /> Add series
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: '1.5rem' }}>
                   <button className="btn btn-ghost" onClick={() => setEditApi(null)}>Cancel</button>
@@ -796,6 +951,75 @@ const VendorManagement: React.FC = () => {
                 </div>
               </Modal>
             )}
+
+            {/* New custom ShipLabel series vendor modal */}
+            {slCustomOpen && (() => {
+              const comboCount = slPickSeries.length * slPickFormats.length;
+              const box: React.CSSProperties = {
+                height: 190, overflowY: 'auto', border: '1px solid var(--navy-200)',
+                borderRadius: 8, padding: '0.35rem 0.5rem', display: 'flex', flexDirection: 'column', gap: 2,
+              };
+              const rowStyle: React.CSSProperties = {
+                display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem',
+                color: 'var(--navy-700)', cursor: 'pointer', padding: '2px 0',
+              };
+              return (
+              <Modal title="New custom series vendors" onClose={() => setSlCustomOpen(false)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--navy-500)' }}>
+                    Pick series and formats — the same lists as the ShipLabel portal. One standalone
+                    vendor is created per <strong>series × format</strong> pair (off the "Custom Label
+                    (Series &amp; Format)" service). Each shows in the vendor list and can be granted to
+                    users. Pairs that already exist are skipped.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div>
+                      <label className="form-label">Series ({slPickSeries.length})</label>
+                      <div style={box}>
+                        {SL_SERIES.map(s => (
+                          <label key={s.value} style={rowStyle}>
+                            <input type="checkbox" checked={slPickSeries.includes(s.value)}
+                              onChange={() => toggleSlSeries(s.value)}
+                              style={{ accentColor: 'var(--accent-600)' }} />
+                            {s.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="form-label">Formats ({slPickFormats.length})</label>
+                      <div style={box}>
+                        {SL_FORMATS.map(f => (
+                          <label key={f.value} style={rowStyle}>
+                            <input type="checkbox" checked={slPickFormats.includes(f.value)}
+                              onChange={() => toggleSlFormat(f.value)}
+                              style={{ accentColor: 'var(--accent-600)' }} />
+                            {f.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="form-label">Rate per Label ($)</label>
+                    <input className="form-input" type="number" step="0.01" min="0" placeholder="0.00"
+                      value={slCustomRate}
+                      onChange={e => setSlCustomRate(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: '1.5rem' }}>
+                  <span style={{ marginRight: 'auto', fontSize: '0.78rem', color: 'var(--navy-400)' }}>
+                    {comboCount} vendor{comboCount !== 1 ? 's' : ''} will be created
+                  </span>
+                  <button className="btn btn-ghost" onClick={() => setSlCustomOpen(false)}>Cancel</button>
+                  <button className="btn btn-primary" onClick={handleCreateCustomSlVendor}
+                    disabled={slCustomSaving || comboCount === 0}>
+                    {slCustomSaving ? 'Creating…' : `Create ${comboCount || ''} vendor${comboCount !== 1 ? 's' : ''}`}
+                  </button>
+                </div>
+              </Modal>
+              );
+            })()}
           </>
         );
       })()}

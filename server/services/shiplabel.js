@@ -100,13 +100,14 @@ async function getServices() {
   const res = await apiRequest('POST', '/api/v2/services', {});
   // Response shape: { success: { labels: [...] } }
   const raw = (res.success && res.success.labels) || res.data || [];
-  return raw
-    .filter(s => s.name !== 'Custom Label (Series & Format)')
-    .map(s => ({
-      ...s,
-      inferredSeries: parseSeriesFromName(s.name),
-      inferredFormat: inferFormatFromName(s.name),
-    }));
+  // The "Custom Label (Series & Format)" service is included: it has no fixed
+  // series/format, so the admin configures the selectable combos on the vendor
+  // via its shiplabelSeries[] list (Admin → Vendors → ShipLabel → Edit).
+  return raw.map(s => ({
+    ...s,
+    inferredSeries: parseSeriesFromName(s.name),
+    inferredFormat: inferFormatFromName(s.name),
+  }));
 }
 
 /**

@@ -293,4 +293,81 @@ router.post('/import-from-shiplabel', authenticateToken, authorize('admin'), asy
   }
 });
 
+// ── POST /api/vendors/shiplabel-custom ────────────────────────
+// Admin: create standalone ShipLabel vendors off the "Custom Label (Series &
+// Format)" service. `series` and `format` may each be a string or an array; one
+// vendor is created per series × format pair. Each becomes its own vendor row —
+// independently activatable and grantable to users. Existing pairs are skipped.
+router.post('/shiplabel-custom', authenticateToken, authorize('admin'), async (req, res) => {
+  try {
+    const toList = v => [...new Set(
+      (Array.isArray(v) ? v : [v]).map(x => String(x == null ? '' : x).trim()).filter(Boolean)
+    )];
+    const seriesList = toList(req.body.series);
+    const formatList = toList(req.body.format);
+    const name       = String(req.body.name || '').trim();
+    const rate       = Number(req.body.rate) || 0;
+
+    if (!seriesList.length || !formatList.length) {
+      return res.status(400).json({ message: 'At least one series and one format are required' });
+    }
+
+    // Resolve the Custom Label service id from an already-synced vendor;
+    // fall back to a live ShipLabel lookup only if none exists yet.
+    const synced = await Vendor.findOne({
+      source: 'shiplabel',
+      name: { $regex: '^Custom Label \\(Series & Format\\)' },
+    });
+    let serviceId = synced?.shiplabelServiceId || null;
+
+    if (!serviceId) {
+      const shiplabel = require('../services/shiplabel');
+      const services  = await shiplabel.getServices();
+      const custom    = services.find(s => s.name === 'Custom Label (Series & Format)');
+      if (!custom) {
+        return res.status(502).json({ message: 'No "Custom Label (Series & Format)" service on this ShipLabel account' });
+      }
+      serviceId = String(custom.id);
+    }
+
+    const single = seriesList.length === 1 && formatList.length === 1;
+    const created = [];
+    const skipped = [];
+
+    for (const series of seriesList) {
+      for (const format of formatList) {
+        const key = {
+          source: 'shiplabel',
+          shiplabelServiceId:   serviceId,
+          shiplabelLabelSeries: series,
+          shiplabelLabelFormat: format,
+        };
+        if (await Vendor.findOne(key)) { skipped.push(`${series} · ${format}`); continue; }
+
+        const vendor = await Vendor.create({
+          ...key,
+          name:            (single && name) ? name : `Custom · ${series} · ${format}`,
+          carrier:         'USPS',
+          vendorType:      'api',
+          shippingService: format,
+          rate,
+          isActive:        true,
+          visibleToRoles:  ['admin', 'reseller', 'user'],
+        });
+        created.push(vendor.name);
+      }
+    }
+
+    res.status(201).json({
+      message: `${created.length} vendor${created.length !== 1 ? 's' : ''} created`
+        + (skipped.length ? `, ${skipped.length} already existed` : ''),
+      created,
+      skipped,
+    });
+  } catch (error) {
+    console.error('Create custom ShipLabel vendor error:', error);
+    res.status(500).json({ message: `Server error: ${error.message}` });
+  }
+});
+
 module.exports = router;
