@@ -861,7 +861,7 @@ const VendorManagement: React.FC = () => {
                             <td><span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--navy-900)' }}>{v.name}</span></td>
                             <td><code style={{ background: '#d1fae5', color: '#065f46', padding: '2px 6px', borderRadius: 4, fontSize: '0.75rem' }}>{v.shiplabelServiceId ?? '—'}</code></td>
                             <td style={{ fontSize: '0.82rem', color: 'var(--navy-600)' }}>{v.shiplabelLabelSeries || <span style={{ color: 'var(--navy-300)' }}>—</span>}</td>
-                            <td style={{ fontSize: '0.82rem', color: 'var(--navy-600)' }}>{v.shiplabelLabelFormat || <span style={{ color: 'var(--navy-300)' }}>—</span>}</td>
+                            <td style={{ fontSize: '0.82rem', color: 'var(--navy-600)' }}>{v.shiplabelLabelFormat ? slFormatLabel(v.shiplabelLabelFormat) : <span style={{ color: 'var(--navy-300)' }}>—</span>}</td>
                             <td><span style={{ fontWeight: 700, color: 'var(--success-700)' }}>${v.rate.toFixed(2)}</span></td>
                             <td><span className={v.isActive ? 'badge badge-green' : 'badge badge-red'}>{v.isActive ? 'Active' : 'Inactive'}</span></td>
                             <td>
