@@ -9,6 +9,65 @@ This guide will help you deploy the Label Flow to Railway for production use.
 - MongoDB Atlas account (for production database)
 - Email service (Gmail recommended)
 
+## Alternative: Split Deployment (Vercel Frontend + Railway Backend)
+
+The steps below (3-4) deploy both frontend and backend to Railway. If instead you
+want the frontend on **Vercel** and the backend on **Railway** (two separate
+services), do this:
+
+### Backend → Railway
+
+1. Create a new Railway project from the GitHub repo. Leave the **root
+   directory as the repo root** — `railway.toml` already points Railway at
+   `node server/index.js` and builds via `npm install && npm run build`.
+2. Set these environment variables in the Railway service (see `.env.example`
+   for the full list):
+   ```env
+   MONGODB_URI=...
+   JWT_SECRET=...
+   JWT_EXPIRE=7d
+   ENCRYPTION_KEY=...            # optional but recommended — see .env.example
+   EMAIL_HOST=smtp.gmail.com
+   EMAIL_PORT=587
+   EMAIL_USER=...
+   EMAIL_PASS=...
+   NODE_ENV=production
+   CLIENT_URL=https://<your-vercel-app>.vercel.app   # set AFTER the Vercel deploy exists
+   SHIPPERSHUB_EMAIL=...          # optional fallback
+   SHIPPERSHUB_PASSWORD=...       # optional fallback
+   SHIPLABEL_API_KEY=...          # optional fallback
+   LABELCROW_API_KEY=...          # optional fallback
+   OPEN_EXCHANGE_RATES_APP_ID=... # optional
+   ```
+   `PORT` does not need to be set — Railway injects it automatically and
+   `server/index.js` reads `process.env.PORT`.
+3. Deploy and note the generated Railway domain — you'll need it for the
+   frontend's `REACT_APP_API_URL`.
+
+### Frontend → Vercel
+
+1. Import the same GitHub repo into Vercel as a new project.
+2. Set **Root Directory** to `client` in the Vercel project settings. A
+   `client/vercel.json` is already checked in with the build command, output
+   directory, and a SPA rewrite (so client-side routes like `/dashboard`
+   don't 404 on refresh).
+3. Add this environment variable in Vercel (Project Settings → Environment
+   Variables):
+   ```env
+   REACT_APP_API_URL=https://<your-railway-app>.up.railway.app/api
+   ```
+   Note the required `/api` suffix — the client code appends routes like
+   `/auth/login` directly to this base.
+4. Deploy. Note the generated Vercel domain.
+5. Go back to the Railway backend and set `CLIENT_URL` to that Vercel domain
+   (this drives both CORS `allowedOrigins` and the Socket.IO CORS config in
+   `server/index.js`), then redeploy the backend so the new value takes
+   effect.
+
+Order matters: deploy the backend first (to get its URL for
+`REACT_APP_API_URL`), then the frontend, then circle back and set
+`CLIENT_URL` on the backend once the frontend URL is known.
+
 ## Step 1: Prepare Your Repository
 
 1. **Initialize Git** (if not already done):
