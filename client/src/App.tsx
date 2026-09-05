@@ -19,8 +19,6 @@ import UserVendorAccess from './pages/UserVendorAccess';
 import AdminManifestOps from './pages/AdminManifestOps';
 import LiveActivity from './pages/LiveActivity';
 import AdminLiveActivity from './pages/AdminLiveActivity';
-import AdminWarehouses from './pages/AdminWarehouses';
-import AdminStates from './pages/AdminStates';
 import ManifestHistory from './pages/ManifestHistory';
 import ResellerClients from './pages/ResellerClients';
 import Finance             from './pages/Finance';
@@ -31,7 +29,6 @@ import Leaderboard         from './pages/Leaderboard';
 import Suggestions         from './pages/Suggestions';
 import ResellerUserStats   from './pages/ResellerUserStats';
 import ResellerBulkAccess  from './pages/ResellerBulkAccess';
-import AdminErrorLogs      from './pages/AdminErrorLogs';
 import BulkVendorAccess    from './pages/BulkVendorAccess';
 import CCLayout             from './pages/CommandCenter/CCLayout';
 import CCDashboard          from './pages/CommandCenter/CCDashboard';
@@ -112,11 +109,8 @@ function App() {
                   <Route path="/admin/financial-dashboard"     element={<AdminOnly><FinancialDashboard /></AdminOnly>} />
                   <Route path="/admin/settings"                element={<AdminOnly><Settings /></AdminOnly>} />
                   <Route path="/admin/live"                    element={<AdminOnly><AdminLiveActivity /></AdminOnly>} />
-                  <Route path="/admin/warehouses"              element={<AdminOnly><AdminWarehouses /></AdminOnly>} />
-                  <Route path="/admin/states"                  element={<AdminOnly><AdminStates /></AdminOnly>} />
                   <Route path="/admin/bulk-tracking-update"   element={<AdminOnly><BulkTrackingUpdate /></AdminOnly>} />
                   <Route path="/admin/user-stats"              element={<AdminOnly><CCUsers /></AdminOnly>} />
-                  <Route path="/admin/logs"                    element={<AdminOnly><AdminErrorLogs /></AdminOnly>} />
 
                   {/* Reseller routes (admin can also access) */}
                   <Route path="/reseller/clients"     element={<AdminOrReseller><ResellerClients /></AdminOrReseller>} />

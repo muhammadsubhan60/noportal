@@ -13,7 +13,6 @@ import {
   TagIcon,
   ClipboardDocumentListIcon,
   RectangleStackIcon,
-  CubeIcon,
   Squares2X2Icon,
   SignalIcon,
   BanknotesIcon,
@@ -24,12 +23,10 @@ import {
   BellIcon,
   MegaphoneIcon,
   Cog6ToothIcon,
-  MapIcon,
   TrophyIcon,
   SparklesIcon,
   LightBulbIcon,
   CommandLineIcon,
-  ExclamationTriangleIcon,
   UsersIcon,
   PhotoIcon,
 } from '@heroicons/react/24/outline';
@@ -324,10 +321,7 @@ const Layout: React.FC = () => {
   // Admin — Operations (Live Monitor now lives in Overview, see above)
   const adminOpsItems: NavItem[] = user?.role === 'admin' ? [
     { name: 'Manifest Ops', href: '/admin/manifest', icon: Squares2X2Icon, current: location.pathname === '/admin/manifest', badge: navCounts.manifestsOpen },
-    { name: 'Warehouses',   href: '/admin/warehouses', icon: CubeIcon, current: location.pathname === '/admin/warehouses' },
-    { name: 'State Analytics',   href: '/admin/states',                icon: MapIcon,       current: location.pathname === '/admin/states' },
     { name: 'AI Bulk Tracking', href: '/admin/bulk-tracking-update', icon: SparklesIcon,  current: location.pathname === '/admin/bulk-tracking-update' },
-    { name: 'Logs & Errors', href: '/admin/logs', icon: ExclamationTriangleIcon, current: location.pathname === '/admin/logs' },
   ] : [];
 
   // Admin — Finance

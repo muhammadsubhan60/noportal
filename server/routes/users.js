@@ -206,6 +206,7 @@ router.put('/:id', authenticateToken, [
   body('role').optional().isIn(['admin', 'reseller', 'user']).withMessage('Invalid role'),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean'),
   body('emailNotifications').optional().isBoolean().withMessage('emailNotifications must be boolean'),
+  body('portalLabels').optional().isObject().withMessage('portalLabels must be an object'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -230,7 +231,7 @@ router.put('/:id', authenticateToken, [
     const updates = {};
 
     // Fields any authenticated user can edit on their own profile
-    const profileFields = ['firstName', 'lastName', 'email', 'emailNotifications'];
+    const profileFields = ['firstName', 'lastName', 'email', 'emailNotifications', 'portalLabels'];
     for (const field of profileFields) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     }

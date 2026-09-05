@@ -37,7 +37,6 @@ const apiCredentialRoutes           = require('./routes/apiCredentials');
 const brandingRoutes                = require('./routes/branding');
 const leaderboardRoutes             = require('./routes/leaderboard');
 const suggestionRoutes              = require('./routes/suggestions');
-const errorLogRoutes                = require('./routes/errorLogs');
 
 // ── Startup validation ────────────────────────────────────────
 // Fail fast rather than running in a broken / insecure state.
@@ -191,7 +190,6 @@ app.use('/api/api-credentials',       apiCredentialRoutes);
 app.use('/api/branding',              brandingRoutes);
 app.use('/api/leaderboard',           leaderboardRoutes);
 app.use('/api/suggestions',           suggestionRoutes);
-app.use('/api/error-logs',            errorLogRoutes);
 
 // ── Health check ──────────────────────────────────────────────
 // Returns minimal info only — no internal state exposed publicly
