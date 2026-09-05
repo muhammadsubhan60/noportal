@@ -2,10 +2,8 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { SocketProvider } from './contexts/SocketContext';
-import { VendorAuthProvider } from './contexts/VendorAuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
-import VendorLayout from './components/VendorLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -17,17 +15,12 @@ import LabelHistory from './pages/LabelHistory';
 import BulkLabels from './pages/BulkLabels';
 import BulkLabelGenerator from './pages/BulkLabelGenerator';
 import BulkTrackingUpdate from './pages/BulkTrackingUpdate';
-import VendorManagement from './pages/VendorManagement';
 import UserVendorAccess from './pages/UserVendorAccess';
 import AdminManifestOps from './pages/AdminManifestOps';
 import LiveActivity from './pages/LiveActivity';
 import AdminLiveActivity from './pages/AdminLiveActivity';
 import AdminWarehouses from './pages/AdminWarehouses';
 import AdminStates from './pages/AdminStates';
-import VendorLogin from './pages/vendor/VendorLogin';
-import VendorDashboard from './pages/vendor/VendorDashboard';
-import VendorJobDetail from './pages/vendor/VendorJobDetail';
-import VendorEarnings  from './pages/vendor/VendorEarnings';
 import ManifestHistory from './pages/ManifestHistory';
 import ResellerClients from './pages/ResellerClients';
 import Finance             from './pages/Finance';
@@ -66,21 +59,11 @@ function App() {
     <ThemeProvider>
       <AuthProvider>
         <SocketProvider>
-          <VendorAuthProvider>
             <Router>
               <div className="App">
               <Routes>
                 {/* Public routes */}
                 <Route path="/login"  element={<Login />} />
-
-                {/* ── Vendor Portal (completely separate, neutral branding) ── */}
-                <Route path="/vendor-portal/login" element={<VendorLogin />} />
-                <Route path="/vendor-portal" element={<VendorLayout />}>
-                  <Route index element={<Navigate to="/vendor-portal/jobs" replace />} />
-                  <Route path="jobs"      element={<VendorDashboard />} />
-                  <Route path="jobs/:id"  element={<VendorJobDetail />} />
-                  <Route path="earnings"  element={<VendorEarnings />} />
-                </Route>
 
                 {/* No public landing page — send root straight to login */}
                 <Route path="/" element={<Navigate to="/login" replace />} />
@@ -122,7 +105,6 @@ function App() {
                   <Route path="/admin"                         element={<AdminOnly><AdminDashboard /></AdminOnly>} />
                   <Route path="/admin/users"                   element={<AdminOnly><UserManagement /></AdminOnly>} />
                   <Route path="/admin/users/:userId/access"    element={<AdminOnly><UserVendorAccess /></AdminOnly>} />
-                  <Route path="/admin/vendors"                 element={<AdminOnly><VendorManagement /></AdminOnly>} />
                   <Route path="/admin/bulk-vendor-access"      element={<AdminOnly><BulkVendorAccess /></AdminOnly>} />
                   <Route path="/admin/manifest"                element={<AdminOnly><AdminManifestOps /></AdminOnly>} />
                   <Route path="/admin/finance"                 element={<AdminOnly><Finance /></AdminOnly>} />
@@ -148,7 +130,6 @@ function App() {
               </Routes>
             </div>
             </Router>
-          </VendorAuthProvider>
         </SocketProvider>
       </AuthProvider>
     </ThemeProvider>

@@ -23,8 +23,6 @@ const vendorRoutes         = require('./routes/vendors');
 const accessRoutes         = require('./routes/access');
 const manifestRoutes       = require('./routes/manifest');
 const adminManifestRoutes  = require('./routes/adminManifest');
-const vendorPortalRoutes     = require('./routes/vendorPortal');
-const manifestVendorRoutes   = require('./routes/manifestVendors');
 const announcementRoutes     = require('./routes/announcements');
 const paymentLogRoutes       = require('./routes/paymentLogs');
 const statsRoutes            = require('./routes/stats');
@@ -168,8 +166,6 @@ app.use('/api', (req, res, next) => {
 // ── Routes ────────────────────────────────────────────────────
 // Auth routes get the stricter per-endpoint rate limiter
 app.use('/api/auth',         authLimiter, authRoutes);
-// Vendor portal login also gets the auth limiter
-app.use('/api/vendor-portal', authLimiter, vendorPortalRoutes);
 
 app.use('/api/users',    userRoutes);
 app.use('/api/email',    emailRoutes);
@@ -181,7 +177,6 @@ app.use('/api/vendors',        vendorRoutes);
 app.use('/api/access',         accessRoutes);
 app.use('/api/manifest',       manifestRoutes);
 app.use('/api/admin/manifest', adminManifestRoutes);
-app.use('/api/manifest-vendors', manifestVendorRoutes);
 app.use('/api/announcements',   announcementRoutes);
 app.use('/api/payment-logs',    paymentLogRoutes);
 app.use('/api/stats',           statsRoutes);

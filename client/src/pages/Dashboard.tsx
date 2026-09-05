@@ -59,14 +59,10 @@ const CARRIER_GRADIENT: Record<string, string> = {
   DHL:  'linear-gradient(90deg, #B45309, #FCD34D)',
 };
 const MANIFEST_STATUS_COLOR: Record<string, string> = {
-  open: '#6366f1', assigned: '#0ea5e9', accepted: '#0ea5e9',
-  uploaded: '#f59e0b', under_review: '#ef4444', completed: '#22c55e',
-  cancelled: '#94a3b8', rejected: '#f97316',
+  open: '#6366f1', completed: '#22c55e', cancelled: '#94a3b8',
 };
 const MANIFEST_STATUS_LABEL: Record<string, string> = {
-  open: 'Open', assigned: 'Assigned', accepted: 'Accepted',
-  uploaded: 'Uploaded', under_review: 'Under Review',
-  completed: 'Completed', cancelled: 'Cancelled', rejected: 'Rejected',
+  open: 'Open', completed: 'Completed', cancelled: 'Cancelled',
 };
 
 const FONT = "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif";
@@ -822,7 +818,6 @@ const UserDashboard: React.FC<{ firstName: string }> = ({ firstName }) => {
                       <span className={`carrier-badge ${job.carrier?.toLowerCase()}`} style={{ flexShrink: 0 }}>{job.carrier}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--navy-800)' }}>{job.userBilling?.labelCount ?? '?'} labels</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--navy-500)' }}>{job.assignedVendor?.name ?? 'Unassigned'}</div>
                       </div>
                       <span style={{ fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: `${sc}18`, color: sc }}>
                         {MANIFEST_STATUS_LABEL[job.status] || job.status}

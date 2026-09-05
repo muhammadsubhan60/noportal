@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
  * VendorCost — admin sets the per-label cost for each carrier (and vendor) per month.
  *
  * USPS (ShippersHub, non-manifest):   vendorName = null  → one cumulative rate covers all USPS labels.
- * UPS / FedEx / DHL (manifest):       vendorName = the ManifestVendor name  → per-vendor rate.
+ * UPS / FedEx / DHL (manifest):       vendorName = the Vendor name  → per-vendor rate.
  *
  * Unique index prevents duplicate entries for the same carrier+vendor+month+year.
  */

@@ -67,12 +67,11 @@ async function adminStats() {
       { $group: { _id: null, total: { $sum: '$currentBalance' } } },
     ]),
     // Manifest jobs needing admin action
-    ManifestJob.find({ status: { $in: ['under_review', 'open', 'uploaded'] } })
+    ManifestJob.find({ status: 'open' })
       .populate('user', 'firstName lastName email')
-      .populate('assignedVendor', 'name')
       .sort({ createdAt: -1 })
       .limit(8)
-      .select('carrier status userBilling assignedVendor user createdAt'),
+      .select('carrier status userBilling user createdAt'),
     // Recent signups
     User.find().sort({ createdAt: -1 }).limit(6).select('firstName lastName email role isActive createdAt'),
     // Tracking status breakdown across all generated labels (platform-wide)
@@ -103,16 +102,14 @@ async function adminStats() {
   }
 
   // --- process manifest groups ---
-  const ACTIVE_STATUSES = ['open', 'assigned', 'accepted', 'uploaded'];
-  const manifests = { total: 0, active: 0, underReview: 0, completed: 0, cancelled: 0, revenue: 0, byStatus: {} };
+  const manifests = { total: 0, active: 0, completed: 0, cancelled: 0, revenue: 0, byStatus: {} };
   for (const g of manifestGroups) {
     manifests.total   += g.count;
     manifests.revenue += g.revenue || 0;
     manifests.byStatus[g._id] = g.count;
-    if (ACTIVE_STATUSES.includes(g._id)) manifests.active += g.count;
-    if (g._id === 'under_review') manifests.underReview += g.count;
-    if (g._id === 'completed')    manifests.completed   += g.count;
-    if (g._id === 'cancelled')    manifests.cancelled   += g.count;
+    if (g._id === 'open')      manifests.active    += g.count;
+    if (g._id === 'completed') manifests.completed += g.count;
+    if (g._id === 'cancelled') manifests.cancelled += g.count;
   }
 
   // --- process vendor groups ---
@@ -179,13 +176,12 @@ async function resellerStats(userId) {
     labelTotals.byCarrier[g._id.carrier || 'Other'] = g.count;
   }
 
-  const ACTIVE_STATUSES = ['open', 'assigned', 'accepted', 'uploaded', 'under_review'];
   const manifestTotals = { total: 0, active: 0, completed: 0, revenue: 0 };
   for (const g of manifestGroups) {
     manifestTotals.total   += g.count;
     manifestTotals.revenue += g.revenue || 0;
-    if (ACTIVE_STATUSES.includes(g._id)) manifestTotals.active    += g.count;
-    if (g._id === 'completed')            manifestTotals.completed += g.count;
+    if (g._id === 'open')      manifestTotals.active    += g.count;
+    if (g._id === 'completed') manifestTotals.completed += g.count;
   }
 
   // compute totals from Balance transactions
@@ -232,11 +228,10 @@ async function userStats(userId) {
     Balance.getOrCreateBalance(userId),
     Label.find({ user: userId }).sort({ createdAt: -1 }).limit(5)
       .select('carrier vendorName trackingId price status createdAt isBulk bulkJobId'),
-    ManifestJob.find({ user: userId, status: { $in: ['open','assigned','accepted','uploaded','under_review'] } })
-      .populate('assignedVendor', 'name')
+    ManifestJob.find({ user: userId, status: 'open' })
       .sort({ createdAt: -1 })
       .limit(4)
-      .select('carrier status userBilling assignedVendor createdAt'),
+      .select('carrier status userBilling createdAt'),
     // USPS non-manifested generated labels for savings calculation
     Label.find({ user: uid, carrier: 'USPS', isBulk: false, status: 'generated' })
       .select('weight price').lean(),
@@ -257,13 +252,12 @@ async function userStats(userId) {
     labels.byCarrier[c] = (labels.byCarrier[c] || 0) + g.count;
   }
 
-  const ACTIVE = ['open','assigned','accepted','uploaded','under_review'];
   const manifests = { total: 0, active: 0, completed: 0, cancelled: 0 };
   for (const g of manifestGroups) {
     manifests.total += g.count;
-    if (ACTIVE.includes(g._id))   manifests.active    += g.count;
-    if (g._id === 'completed')     manifests.completed += g.count;
-    if (g._id === 'cancelled')     manifests.cancelled += g.count;
+    if (g._id === 'open')      manifests.active    += g.count;
+    if (g._id === 'completed') manifests.completed += g.count;
+    if (g._id === 'cancelled') manifests.cancelled += g.count;
   }
 
   const txns      = balance.transactions || [];
@@ -340,7 +334,7 @@ router.get('/admin-live', authenticateToken, async (req, res) => {
       ]),
       User.countDocuments({ isActive: true, role: { $ne: 'admin' } }),
       User.countDocuments({ role: { $ne: 'admin' } }),
-      ManifestJob.countDocuments({ status: { $in: ['open', 'uploaded', 'under_review'] } }),
+      ManifestJob.countDocuments({ status: 'open' }),
       ManifestJob.countDocuments({ status: 'completed' }),
       Label.aggregate([{ $group: { _id: null, total: { $sum: '$price' } } }]),
       Label.find({ status: 'generated' })
@@ -619,17 +613,11 @@ router.get('/label-chart', authenticateToken, async (req, res) => {
       // Manifest jobs (only completed; count label qty not job qty)
       ManifestJob.aggregate([
         { $match: { createdAt: { $gte: start, $lte: end }, carrier, status: 'completed' } },
-        { $lookup: { from: 'vendors',        localField: 'vendor',         foreignField: '_id', as: '_v'  } },
-        { $lookup: { from: 'manifestvendors', localField: 'assignedVendor', foreignField: '_id', as: '_mv' } },
+        { $lookup: { from: 'vendors', localField: 'vendor', foreignField: '_id', as: '_v' } },
         { $group: {
             _id: {
               ...dayGroupStage,
-              vendor: {
-                $ifNull: [
-                  { $arrayElemAt: ['$_v.name',  0] },
-                  { $arrayElemAt: ['$_mv.name', 0] },
-                ],
-              },
+              vendor: { $arrayElemAt: ['$_v.name', 0] },
             },
             count: { $sum: '$userBilling.labelCount' },
         }},

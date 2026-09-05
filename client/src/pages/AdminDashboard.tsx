@@ -33,7 +33,7 @@ interface AdminStats {
     voided: number;
   };
   manifests: {
-    total: number; active: number; underReview: number; completed: number;
+    total: number; active: number; completed: number;
     cancelled: number; revenue: number; byStatus: Record<string, number>;
   };
   vendors: { active: number; inactive: number; dueBalance: number; totalEarnings: number };
@@ -52,14 +52,10 @@ const fmt$ = (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigit
 const fmtN = (v: number) => v.toLocaleString('en-US');
 
 const MANIFEST_STATUS_COLOR: Record<string, string> = {
-  open: '#6366f1', assigned: '#0ea5e9', accepted: '#0ea5e9',
-  uploaded: '#f59e0b', under_review: '#ef4444',
-  completed: '#22c55e', cancelled: '#94a3b8', rejected: '#f97316',
+  open: '#6366f1', completed: '#22c55e', cancelled: '#94a3b8',
 };
 const MANIFEST_STATUS_LABEL: Record<string, string> = {
-  open: 'Open', assigned: 'Assigned', accepted: 'Accepted',
-  uploaded: 'Uploaded', under_review: 'Under Review',
-  completed: 'Completed', cancelled: 'Cancelled', rejected: 'Rejected',
+  open: 'Open', completed: 'Completed', cancelled: 'Cancelled',
 };
 const CARRIER_COLORS: Record<string, string> = {
   USPS: '#1D4ED8', UPS: '#92400E', FedEx: '#5B21B6', DHL: '#B45309',
@@ -534,8 +530,8 @@ const AdminDashboard: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
         <KpiCard label="Total Users"      value={fmtN(users.total)}           sub={`${users.newThisMonth} new this month`} color="#6366f1" Icon={UserGroupIcon}             onClick={() => navigate('/admin/users')} />
         <KpiCard label="Labels Generated" value={fmtN(labels.generated)}      sub={`${labels.today} today`}               color="#0ea5e9" Icon={TagIcon} />
-        <KpiCard label="Active Manifests" value={fmtN(manifests.active)}      sub={`${manifests.underReview} need review`} color="#f59e0b" Icon={ClipboardDocumentListIcon} onClick={() => navigate('/admin/manifest')} />
-        <KpiCard label="Pending Review"   value={fmtN(manifests.underReview)} sub="Jobs to approve"                       color="#ef4444" Icon={ExclamationTriangleIcon}    onClick={() => navigate('/admin/manifest')} />
+        <KpiCard label="Active Manifests" value={fmtN(manifests.active)}    sub={`${manifests.completed} completed`} color="#f59e0b" Icon={ClipboardDocumentListIcon} onClick={() => navigate('/admin/manifest')} />
+        <KpiCard label="Cancelled"        value={fmtN(manifests.cancelled)} sub="Manifest jobs cancelled"             color="#ef4444" Icon={ExclamationTriangleIcon}    onClick={() => navigate('/admin/manifest')} />
         <KpiCard label="Platform Revenue" value={fmt$(totalRevenue)}           sub="Labels + manifests"                    color="#22c55e" Icon={CurrencyDollarIcon} />
         <KpiCard label="Balance Held"     value={fmt$(totalBalanceHeld)}       sub="Across all users"                     color="#8b5cf6" Icon={CurrencyDollarIcon} />
       </div>
@@ -631,9 +627,9 @@ const AdminDashboard: React.FC = () => {
             <div style={{ padding: '0.85rem 1.3rem', borderBottom: '1px solid var(--navy-100)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                 <SLabel text="Action Required" accent="#ef4444" />
-                {manifests.underReview > 0 && (
+                {manifests.active > 0 && (
                   <span style={{ background: '#fef2f2', color: '#ef4444', border: '1px solid #FECACA', fontSize: '0.67rem', fontWeight: 700, padding: '1px 7px', borderRadius: 99 }}>
-                    {manifests.underReview} under review
+                    {manifests.active} open
                   </span>
                 )}
               </div>
@@ -648,7 +644,7 @@ const AdminDashboard: React.FC = () => {
               <div style={{ overflowX: 'auto' }}>
                 <table className="sh-table">
                   <thead>
-                    <tr><th>User</th><th>Carrier</th><th>Labels</th><th>Amount</th><th>Vendor</th><th>Submitted</th><th>Status</th></tr>
+                    <tr><th>User</th><th>Carrier</th><th>Labels</th><th>Amount</th><th>Submitted</th><th>Status</th></tr>
                   </thead>
                   <tbody>
                     {recentManifests.map((job: any) => (
@@ -660,7 +656,6 @@ const AdminDashboard: React.FC = () => {
                         <td><span className={`carrier-badge ${job.carrier?.toLowerCase()}`}>{job.carrier}</span></td>
                         <td style={{ fontWeight: 600, fontSize: '0.8rem' }}>{job.userBilling?.labelCount ?? '—'}</td>
                         <td style={{ fontWeight: 700, color: '#22c55e', fontSize: '0.8rem' }}>{fmt$(job.userBilling?.totalAmount || 0)}</td>
-                        <td style={{ fontSize: '0.77rem', color: 'var(--navy-600)' }}>{job.assignedVendor?.name ?? '—'}</td>
                         <td style={{ fontSize: '0.77rem', color: 'var(--navy-500)', whiteSpace: 'nowrap' }}>{new Date(job.createdAt).toLocaleDateString()}</td>
                         <td><StatusPill status={job.status} /></td>
                       </tr>
@@ -687,7 +682,7 @@ const AdminDashboard: React.FC = () => {
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', position: 'relative' }}>
               <p style={{ fontSize: '0.63rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.55, margin: 0 }}>Vendor Health</p>
-              <button onClick={() => navigate('/admin/vendors')} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: 7, padding: '3px 9px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: FONT }}>
+              <button onClick={() => navigate('/admin/users')} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: 7, padding: '3px 9px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: FONT }}>
                 Manage →
               </button>
             </div>
@@ -725,7 +720,7 @@ const AdminDashboard: React.FC = () => {
               <button className="btn btn-ghost btn-sm" style={{ fontSize: '0.7rem', fontFamily: FONT }} onClick={() => navigate('/admin/manifest')}>View all →</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem' }}>
-              {['open','assigned','uploaded','under_review','completed','cancelled'].map(s => {
+              {['open','completed','cancelled'].map(s => {
                 const count = manifests.byStatus[s] || 0;
                 const pct = manifests.total > 0 ? Math.round(count / manifests.total * 100) : 0;
                 const color = MANIFEST_STATUS_COLOR[s];
@@ -754,7 +749,7 @@ const AdminDashboard: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <QAction label="Manage Users"        sub="Add, edit, manage balances" Icon={UserGroupIcon}          color="#6366f1" onClick={() => navigate('/admin/users')} />
               <QAction label="Manifest Operations" sub="Review & approve jobs"      Icon={Squares2X2Icon}         color="#ef4444" onClick={() => navigate('/admin/manifest')} />
-              <QAction label="Vendor Management"   sub="API & manifest vendors"     Icon={BuildingStorefrontIcon} color="#22c55e" onClick={() => navigate('/admin/vendors')} />
+              <QAction label="Vendor Management"   sub="Manage vendor pricing & access" Icon={BuildingStorefrontIcon} color="#22c55e" onClick={() => navigate('/admin/users')} />
               <QAction label="Live Activity"        sub="Real-time platform feed"   Icon={TruckIcon}              color="#0ea5e9" onClick={() => navigate('/activity')} />
             </div>
           </div>

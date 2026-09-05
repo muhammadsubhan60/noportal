@@ -7,18 +7,12 @@ const API = process.env.REACT_APP_API_URL
   || (window.location.hostname === 'localhost' ? 'http://localhost:5001/api' : '/api');
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
-  pending:      { label: 'Pending',        color: '#64748b', bg: '#f1f5f9' },
-  open:         { label: 'Open',           color: '#0891b2', bg: '#ecfeff' },
-  assigned:     { label: 'Assigned',       color: '#d97706', bg: '#fffbeb' },
-  accepted:     { label: 'In Progress',    color: '#2563eb', bg: '#eff6ff' },
-  uploaded:     { label: 'Uploaded',       color: '#7c3aed', bg: '#f5f3ff' },
-  under_review: { label: 'Under Review',   color: '#6366f1', bg: '#eef2ff' },
-  completed:    { label: 'Completed',      color: '#059669', bg: '#ecfdf5' },
-  cancelled:    { label: 'Cancelled',      color: '#dc2626', bg: '#fef2f2' },
-  rejected:     { label: 'Rejected',       color: '#ea580c', bg: '#fff7ed' },
+  open:      { label: 'Open',      color: '#0891b2', bg: '#ecfeff' },
+  completed: { label: 'Completed', color: '#059669', bg: '#ecfdf5' },
+  cancelled: { label: 'Cancelled', color: '#dc2626', bg: '#fef2f2' },
 };
 
-const CANCELLABLE = ['open', 'pending', 'assigned'];
+const CANCELLABLE = ['open'];
 
 const ManifestHistory: React.FC = () => {
   const { token } = useAuth() as any;

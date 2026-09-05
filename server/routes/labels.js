@@ -471,11 +471,18 @@ router.post('/bulk', authenticateToken, [
           deducted:    true,
           deductedAt:  new Date(),
         },
-        timeline: [{ status: 'open', note: 'Job submitted by user — open for vendor acceptance' }],
+        timeline: [{ status: 'open', note: 'Job submitted by user — pending admin fulfillment' }],
       });
 
-      // Broadcast to vendor portal via socket
       if (req.io) req.io.emit('manifest-job-open', { jobId: job._id, carrier: vendor.carrier });
+
+      // Notify admins via Resend that a new manifest file was uploaded
+      try {
+        const { sendResendEmail, manifestJobSubmitted, MANIFEST_ADMIN_ALERT_EMAILS } = require('../services/emailService');
+        const userName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email;
+        const tpl = manifestJobSubmitted(userName, req.user.email, job._id.toString(), vendor.carrier, labelRows.length);
+        await sendResendEmail({ to: MANIFEST_ADMIN_ALERT_EMAILS, ...tpl });
+      } catch (_) { /* email failure should not block the response */ }
 
       return res.status(201).json({
         type:        'manifest',
@@ -486,7 +493,7 @@ router.post('/bulk', authenticateToken, [
         vendorName:  vendor.name,
         totalCost,
         newBalance:  balance.currentBalance,
-        message:     'Manifest job submitted — waiting for a vendor to accept',
+        message:     'Manifest job submitted — pending fulfillment',
       });
     }
 

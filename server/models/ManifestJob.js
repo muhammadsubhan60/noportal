@@ -1,11 +1,10 @@
 const mongoose = require('mongoose');
 
 const timelineEventSchema = new mongoose.Schema({
-  status:            { type: String },
-  note:              { type: String },
-  performedBy:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  byVendor:          { type: Boolean, default: false },
-  timestamp:         { type: Date, default: Date.now },
+  status:      { type: String },
+  note:        { type: String },
+  performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  timestamp:   { type: Date, default: Date.now },
 }, { _id: false });
 
 const billingBreakdownSchema = new mongoose.Schema({
@@ -17,23 +16,17 @@ const billingBreakdownSchema = new mongoose.Schema({
 const manifestJobSchema = new mongoose.Schema({
 
   // ── Core ──────────────────────────────────────────────────
-  user:           { type: mongoose.Schema.Types.ObjectId, ref: 'User',           required: true },
-  carrier:        { type: String, enum: ['USPS', 'UPS', 'FedEx', 'DHL'],         required: true },
-  vendor:         { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor',          default: null },
-  assignedVendor: { type: mongoose.Schema.Types.ObjectId, ref: 'ManifestVendor',  default: null },
+  user:    { type: mongoose.Schema.Types.ObjectId, ref: 'User',   required: true },
+  carrier: { type: String, enum: ['USPS', 'UPS', 'FedEx', 'DHL'], required: true },
+  vendor:  { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
 
   // ── Status ────────────────────────────────────────────────
-  // open         → broadcast to all matching vendors; any can claim it
-  // assigned     → a vendor claimed the job (can download CSV, start work)
-  // accepted     → vendor explicitly confirmed (legacy / manual assignment flow)
-  // uploaded     → vendor uploaded result ZIP (cooling period active)
-  // under_review → cooling passed, waiting admin approval
-  // completed    → admin approved, user notified
-  // cancelled    → job cancelled (can be resubmitted)
-  // rejected     → admin rejected vendor upload (vendor must re-upload)
+  // open      → waiting for admin to produce and upload the result file
+  // completed → admin uploaded the result; user can download
+  // cancelled → job cancelled (balance refunded if user-initiated)
   status: {
     type: String,
-    enum: ['open', 'assigned', 'accepted', 'uploaded', 'under_review', 'completed', 'cancelled', 'rejected'],
+    enum: ['open', 'completed', 'cancelled'],
     default: 'open',
   },
 
@@ -45,13 +38,12 @@ const manifestJobSchema = new mongoose.Schema({
     labelCount:   { type: Number, default: 0 },
   },
 
-  // ── Result file (uploaded by vendor) ──────────────────────
+  // ── Result file (uploaded by admin) ───────────────────────
   resultFile: {
-    originalName:    String,
-    storedName:      String,
-    path:            String,
-    uploadedAt:      Date,
-    coolingDeadline: Date,   // vendor can cancel upload within 1 min
+    originalName: String,
+    storedName:   String,
+    path:         String,
+    uploadedAt:   Date,
   },
 
   // ── User billing (deducted at submission, tier-based) ─────
@@ -63,26 +55,12 @@ const manifestJobSchema = new mongoose.Schema({
     breakdown:   [billingBreakdownSchema],
   },
 
-  // ── Vendor earning (credited when admin approves) ─────────
-  vendorEarning: {
-    ratePerLabel: { type: Number, default: 0 },
-    labelCount:   { type: Number, default: 0 },
-    totalAmount:  { type: Number, default: 0 },
-    credited:     { type: Boolean, default: false },
-    creditedAt:   Date,
-  },
-
   // ── Timestamps for key events ─────────────────────────────
-  assignedAt:        Date,
-  acceptedAt:        Date,
-  vendorUploadedAt:  Date,
-  adminReviewedAt:   Date,
-  completedAt:       Date,
-  cancelledAt:       Date,
-  cancelledBy:       { type: String, enum: ['admin', 'vendor', 'user', null], default: null },
+  completedAt:        Date,
+  cancelledAt:        Date,
+  cancelledBy:        { type: String, enum: ['admin', 'user', null], default: null },
   cancellationReason: String,
-  rejectionReason:   String,
-  adminNotes:        String,
+  adminNotes:         String,
 
   // ── Audit trail ───────────────────────────────────────────
   timeline: [timelineEventSchema],
@@ -90,7 +68,6 @@ const manifestJobSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 manifestJobSchema.index({ user: 1, status: 1 });
-manifestJobSchema.index({ assignedVendor: 1, status: 1 });
 manifestJobSchema.index({ carrier: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('ManifestJob', manifestJobSchema);

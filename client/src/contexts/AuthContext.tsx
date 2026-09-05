@@ -142,13 +142,9 @@ axios.interceptors.request.use(
       config.url = config.url.slice(4);
     }
 
-    // Never overwrite vendor-portal requests — they carry their own token
-    const isVendorRequest = config.url?.includes('/vendor-portal/');
-    if (!isVendorRequest) {
-      const token = localStorage.getItem('token');
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
@@ -163,9 +159,8 @@ axios.interceptors.response.use(
   (response) => response,
   (error) => {
     const url = error.config?.url || '';
-    const isAuthEndpoint    = url.includes('/auth/login');
-    const isVendorEndpoint  = url.includes('/vendor-portal/');
-    if (error.response?.status === 401 && !isAuthEndpoint && !isVendorEndpoint) {
+    const isAuthEndpoint = url.includes('/auth/login');
+    if (error.response?.status === 401 && !isAuthEndpoint) {
       localStorage.removeItem('token');
       window.location.href = '/login';
     }

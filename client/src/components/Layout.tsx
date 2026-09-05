@@ -13,7 +13,6 @@ import {
   TagIcon,
   ClipboardDocumentListIcon,
   RectangleStackIcon,
-  BuildingStorefrontIcon,
   CubeIcon,
   Squares2X2Icon,
   SignalIcon,
@@ -106,7 +105,7 @@ const Layout: React.FC = () => {
   const location         = useLocation();
   const navigate         = useNavigate();
   const [balance, setBalance] = useState<number | null>(null);
-  const [navCounts, setNavCounts] = useState<{ users?: number; manifestsUnderReview?: number; labelsToday?: number; clientCount?: number }>({});
+  const [navCounts, setNavCounts] = useState<{ users?: number; manifestsOpen?: number; labelsToday?: number; clientCount?: number }>({});
   const [branding, setBranding] = useState<{ orgName: string; logoUrl: string | null }>({ orgName: '', logoUrl: null });
   const [brandModalOpen, setBrandModalOpen] = useState(false);
   const [brandForm, setBrandForm] = useState<{ orgName: string; logoFile: File | null; logoPreview: string | null }>({ orgName: '', logoFile: null, logoPreview: null });
@@ -198,7 +197,7 @@ const Layout: React.FC = () => {
       .then(res => {
         const d = res.data;
         if (user.role === 'admin') {
-          setNavCounts({ users: d.users?.total, manifestsUnderReview: d.manifests?.underReview, labelsToday: d.labels?.today });
+          setNavCounts({ users: d.users?.total, manifestsOpen: d.manifests?.active, labelsToday: d.labels?.today });
         } else if (user.role === 'reseller') {
           setNavCounts({ clientCount: d.clientCount });
         }
@@ -324,7 +323,7 @@ const Layout: React.FC = () => {
 
   // Admin — Operations (Live Monitor now lives in Overview, see above)
   const adminOpsItems: NavItem[] = user?.role === 'admin' ? [
-    { name: 'Manifest Ops', href: '/admin/manifest', icon: Squares2X2Icon, current: location.pathname === '/admin/manifest', badge: navCounts.manifestsUnderReview },
+    { name: 'Manifest Ops', href: '/admin/manifest', icon: Squares2X2Icon, current: location.pathname === '/admin/manifest', badge: navCounts.manifestsOpen },
     { name: 'Warehouses',   href: '/admin/warehouses', icon: CubeIcon, current: location.pathname === '/admin/warehouses' },
     { name: 'State Analytics',   href: '/admin/states',                icon: MapIcon,       current: location.pathname === '/admin/states' },
     { name: 'AI Bulk Tracking', href: '/admin/bulk-tracking-update', icon: SparklesIcon,  current: location.pathname === '/admin/bulk-tracking-update' },
@@ -342,7 +341,6 @@ const Layout: React.FC = () => {
   // ("Admin Panel" now lives in Overview, see overviewNav above)
   const mgmtItems: NavItem[] = user?.role === 'admin' ? [
     { name: 'Users',       href: '/admin/users',        icon: UserGroupIcon,          current: location.pathname.startsWith('/admin/users'), badge: navCounts.users },
-    { name: 'Vendors',     href: '/admin/vendors',      icon: BuildingStorefrontIcon, current: location.pathname === '/admin/vendors' },
     { name: 'Bulk Vendor Access', href: '/admin/bulk-vendor-access', icon: UsersIcon, current: location.pathname === '/admin/bulk-vendor-access' },
     { name: 'User Stats',  href: '/admin/user-stats',   icon: PresentationChartLineIcon, current: location.pathname === '/admin/user-stats' },
     { name: 'Settings',    href: '/admin/settings',     icon: Cog6ToothIcon,          current: location.pathname === '/admin/settings' },
